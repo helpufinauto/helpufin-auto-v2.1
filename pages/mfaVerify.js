@@ -381,6 +381,13 @@ if(assurance?.currentLevel === "aal2"){
 const profile =
 await getUserProfile();
 
+/* PHASE 1 — MFA is part of login: same landing reset as
+   pages/login.js so the previous session's dashboard view
+   never decides where the verified login lands. */
+try{
+  sessionStorage.removeItem("dashboardView");
+}catch(err){}
+
 await navigate(
 profile?.role === "admin"
 ? "/admin"
@@ -514,6 +521,13 @@ return;
    onAuthStateChange handler in js/api.js). */
 const profile =
 await getUserProfile();
+
+/* PHASE 1 — MFA is part of login: same landing reset as
+   pages/login.js so the previous session's dashboard view
+   never decides where the verified login lands. */
+try{
+  sessionStorage.removeItem("dashboardView");
+}catch(err){}
 
 await navigate(
 profile?.role === "admin"

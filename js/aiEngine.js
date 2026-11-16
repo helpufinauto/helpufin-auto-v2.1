@@ -651,12 +651,12 @@ if(v.created_at){
 if(user){
 
   /* SAVED */
-  if(user.saved.includes(v.id)){
+  if((user.saved || []).includes(v.id)){
     score += 160;
   }
 
   /* VIEWED */
-  if(user.viewed.includes(v.id)){
+  if((user.viewed || []).includes(v.id)){
     score += 70;
   }
 

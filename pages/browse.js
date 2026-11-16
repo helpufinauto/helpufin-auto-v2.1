@@ -1,4 +1,4 @@
-import { renderVehicleCard } from "../components/vehicleCard.js";
+﻿import { renderVehicleCard } from "../components/vehicleCard.js";
 import { supabase } from "../js/api.js";
 import { isAllowed } from "../js/consent.js";
 import { navigate } from "../js/router.js";
@@ -9,9 +9,17 @@ import {
   toast,
   compareButton,
   toggleCompare,
-  getCompare
+  getCompare,
+  showGuestLimitModal
 } from "../js/ui.js";
 import {
+  getGuestSaved,
+  addGuestSaved,
+  removeGuestSaved
+} from "../js/guestStore.js";
+import {
+  getVehicleMakeCounts,
+  getVehicleBodyCounts,
   getMakes,
   getModels,
   getVariants,
@@ -47,6 +55,9 @@ import {
   renderViewToggle,
   loadViewPreference
 } from "../components/viewToggle.js";
+import { getCardDetailLevel, setCardDetailLevel, CARD_DETAIL_CHANGE_EVENT } from "../js/cardDetailPreference.js";
+
+let cardDetailListenerReady = false;
 /* ==========================
 ðŸ”¥ NORMALIZATION HELPERS
 ========================== */
@@ -58,7 +69,7 @@ function normalize(text){
 }
 
 /* ========================== */
-/* 🔥 MAKE-ONLY SEARCH DETECTOR
+/* ?? MAKE-ONLY SEARCH DETECTOR
    Returns true ONLY when the active filter state represents
    a specific Make selection with NO model/variant constraint
    and NO other filters active.  This gates the featured-first
@@ -144,7 +155,7 @@ function isMakeOnlySearch(){
 /* =============================================
    Province/City options come from the shared
    DB-backed catalogue (js/catalog.js) via
-   getProvinces() / getCities(province) — the same
+   getProvinces() / getCities(province) ï¿½ the same
    source of truth used by upload & manage.
    ============================================= */
 
@@ -270,7 +281,12 @@ if(filters.q && filters.q.length >= 2){
   /* ========================== */
 
 if(filters.make){
-  query = query.ilike("make", `%${filters.make}%`);
+  const makes = String(filters.make).split(",").map(v => v.trim()).filter(Boolean);
+  if(makes.length > 1){
+    query = query.or(makes.map(m => `make.ilike.%${m}%`).join(","));
+  } else if(makes.length === 1){
+    query = query.ilike("make", `%${makes[0]}%`);
+  }
 }
 
 if(filters.model && filters.model.trim() !== ""){
@@ -380,10 +396,12 @@ if(filters.motorcycleType){
 }
 
 if(filters.body){
-  query = query.ilike(
-    "body_type",
-    `%${filters.body}%`
-  );
+  const bodies = String(filters.body).split(",").map(v => v.trim()).filter(Boolean);
+  if(bodies.length > 1){
+    query = query.in("body_type", bodies);
+  } else if(bodies.length === 1){
+    query = query.ilike("body_type", `%${bodies[0]}%`);
+  }
 }
 
 if(filters.variant){
@@ -581,7 +599,7 @@ if(filters.batteryCapacity){
 /* PHASE 2 FIX: the Battery Range control is a minimum-range
    selector ("Battery Range: 100 km+") so `gte` above carries the
    intended semantics. The old later `eq` branch silently overrode
-   it (and did the same for Charging Time) — removed here. */
+   it (and did the same for Charging Time) ï¿½ removed here. */
 if(filters.engineCapacity){
   query = query.eq(
     "engine_capacity_cc",
@@ -704,7 +722,7 @@ function updateResultsCount(){
 
   countDebounce = setTimeout(async ()=>{
 
-/* PHASE 3: single state synchronization per interaction — the extra
+/* PHASE 3: single state synchronization per interaction ï¿½ the extra
    syncFiltersFromUI() below was running the same DOM read twice and was
    removed. renderActiveFilterChips() reflects the synced state. */
 syncFiltersFromUI();
@@ -823,7 +841,7 @@ const limit = 20;
 let totalCount = 0;
 
 /* PHASE 2: exact filtered total from the server-side count query.
-   Drives pagination + result metadata — never the current page length. */
+   Drives pagination + result metadata ï¿½ never the current page length. */
 let filteredTotal = 0;
 
 let priceMin = 0;
@@ -916,8 +934,8 @@ let activeRequest = 0;
 let currentRequestToken = 0;
 
 /* =========================================
-PHASE 5 — STALE-WHILE-REVALIDATE CACHE
-(public vehicle results only — never caches
+PHASE 5 ï¿½ STALE-WHILE-REVALIDATE CACHE
+(public vehicle results only ï¿½ never caches
 private user data such as affordability
 profiles or saved-vehicle IDs)
 
@@ -932,8 +950,8 @@ multiple live Supabase queries for the same
 view.
 ======================================== */
 
-const BROWSER_CACHE_TTL_MS = 30_000;     // 30s — brief, marketplace moves fast
-const SECTION_CACHE_TTL_MS = 60_000;     // 60s — featured/new/pre-owned change slowly
+const BROWSER_CACHE_TTL_MS = 30_000;     // 30s ï¿½ brief, marketplace moves fast
+const SECTION_CACHE_TTL_MS = 60_000;     // 60s ï¿½ featured/new/pre-owned change slowly
 
 function cacheKey(...parts){
   return parts.join("::");
@@ -1083,7 +1101,7 @@ let pendingUserDataPromise = null;
 let suggestionCache = {};
 
 /* =========================================
-PHASE 5 — BROWSE CACHING (SWR-lite)
+PHASE 5 ï¿½ BROWSE CACHING (SWR-lite)
 small, safe, short-lived, public-data only.
 ======================================== */
 
@@ -1386,13 +1404,13 @@ function attrEsc(v){
 /* ========================== */
 
 /* =========================================
-PHASE 5 — HUFA BROWSE PERFORMANCE OPTIMISATION
+PHASE 5 ï¿½ HUFA BROWSE PERFORMANCE OPTIMISATION
 Small, safe client-side caches. In-memory only;
 never persisted; never contain private user data.
 ======================================== */
 
 const PHASE5 = {
-  browseTTLMs: 25_000,   // short-lived â 25s browse result cache (spec P5-1)
+  browseTTLMs: 25_000,   // short-lived ï¿½?? 25s browse result cache (spec P5-1)
   sectionTTLMs: 60_000,
   browse: new Map(),
   sections: new Map(),
@@ -1404,7 +1422,7 @@ function phase5IsStale(entry, ttlMs){
   return !entry || (phase5Now() - entry.ts > ttlMs);
 }
 
-/* Browse cache key — must mirror every input that
+/* Browse cache key ï¿½ must mirror every input that
    buildVehicleQuery() and the Supabase order both
    consume, plus the current page. A single change
    produces a new key -> cache miss -> fresh load. */
@@ -1467,7 +1485,7 @@ function phase5WriteSection(sectionId, html){
 }
 
 /* =========================================
-   P5-5 — HUFA BROWSE CATALOGUE MEMOIZATION
+   P5-5 ï¿½ HUFA BROWSE CATALOGUE MEMOIZATION
    Short-lived in-memory memoization around
    repeated PUBLIC Browse catalogue requests.
    60s TTL. In-memory only; never persisted.
@@ -1533,7 +1551,7 @@ function phase5RenderCachedBrowse(){
   if(!cached) return null;
   if(cached._key !== browseCacheKey()) return null;
   if(!Array.isArray(cached.vehicles) || !cached.vehicles.length){
-    /* Never serve a stale empty cache — an empty result is not
+    /* Never serve a stale empty cache ï¿½ an empty result is not
        "safe to show immediately" because inventory moves and the
        user may miss newly listed vehicles. Force a fresh load. */
     return null;
@@ -1604,7 +1622,7 @@ async function phase5LoadSection(sectionId, fetchHtml, boxSelector){
     if(!html) return;
     phase5WriteSection(sectionId, html);
     if(cached && cached.html){
-      /* background refresh finished — update only if box still shows
+      /* background refresh finished ï¿½ update only if box still shows
          the cached content we overwrote above (i.e. user hasn't
          navigated away mid-refresh). */
       if(box.innerHTML === cached.html){
@@ -1730,7 +1748,12 @@ function getAffordabilityMatch(
 
 async function loadSaved(){
   const { data:userData } = await supabase.auth.getUser();
-  if(!userData.user) return;
+
+  if(!userData.user){
+    /* GUEST ï¿½ browser-side saved ids (max 2). */
+    savedIds = getGuestSaved();
+    return;
+  }
 
   const { data } = await supabase
     .from("saved_vehicles")
@@ -1745,8 +1768,48 @@ async function toggleSave(id){
   const { data:userData } = await supabase.auth.getUser();
 
   if(!userData.user){
-    navigate("/login");
+
+    /* =========================================
+       GUEST ï¿½ save / unsave locally (max 2).
+       Never redirected to login.
+    ========================================= */
+
+    if(savedIds.includes(id)){
+
+      removeGuestSaved(id);
+
+      savedIds = savedIds.filter(x => x !== id);
+
+      toast("Removed from saved");
+
+    } else {
+
+      const result = addGuestSaved(id);
+
+      if(!result.ok){
+
+        /* Guest save limit reached ï¿½ show the HUFA message. */
+        showGuestLimitModal("save");
+        return;
+
+      }
+
+      if(!savedIds.includes(id)){
+        savedIds.push(id);
+      }
+
+      toast("Saved vehicle");
+
+    }
+
+    window.__allowUrlSync = false;
+
+    await load();
+
+    window.__allowUrlSync = true;
+
     return;
+
   }
 
   if(savedIds.includes(id)){
@@ -2079,6 +2142,46 @@ d="M9 5l7 7-7 7"
   </div>
   `;
 }
+
+function bodyTypeButtonLabel(){
+  const selected = String(filters.body || "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if(!selected.length) return "All Body Types";
+  if(selected.length === 1) return selected[0];
+  return `${selected[0]} + ${selected.length - 1} more`;
+}
+
+function bodyTypeSection(content){
+  return `
+  <div class="body-type-filter">
+    <button
+      id="bodyTypeToggle"
+      type="button"
+      class="premium-select premium-select-sm w-full text-left"
+      aria-controls="bodyTypeDropdown"
+      aria-expanded="false"
+      onclick="toggleBodyTypeDropdown(this)"
+    >${bodyTypeButtonLabel()}</button>
+    <div id="bodyTypeDropdown" class="sectionContent hidden">
+      ${content}
+    </div>
+  </div>
+  `;
+}
+
+window.toggleBodyTypeDropdown = function(button){
+  const content = document.getElementById("bodyTypeDropdown");
+  if(!button || !content) return;
+  content.classList.toggle("hidden");
+  button.setAttribute(
+    "aria-expanded",
+    String(!content.classList.contains("hidden"))
+  );
+};
+
 window.toggleSection = (btn)=>{
 
   const content =
@@ -2122,8 +2225,8 @@ window.toggleInventorySection = (id)=>{
 
     icon.textContent =
     el.classList.contains("hidden")
-      ? "›"
-      : "⌄";
+      ? "ï¿½"
+      : "?";
 
   }
 
@@ -2139,6 +2242,12 @@ window.toggleInventorySection = (id)=>{
 <h1 class="text-[25px] font-bold tracking-tight mb-0.5 browse-title">
 Browse Vehicles
 </h1>
+
+<div class="mt-2 flex flex-wrap items-center gap-2" data-card-detail-selector>
+  <span class="text-[11px] font-semibold text-slate-500">Card details</span>
+  <button type="button" data-detail-level="simple" class="rounded-lg border px-2.5 py-1 text-[11px] font-semibold" aria-pressed="true">Simple</button>
+  <button type="button" data-detail-level="detailed" class="rounded-lg border px-2.5 py-1 text-[11px] font-semibold" aria-pressed="false">Detailed</button>
+</div>
 
 <p class="text-slate-600 text-[11px] browse-subtitle">
 Find the perfect vehicle from dealerships and private sellers across South Africa
@@ -2752,10 +2861,12 @@ Price
 <label class="block text-[11px] font-medium uppercase tracking-[0.15em] text-slate-500 mb-2 font-semibold">
 Make
 </label>
-<select id="make" class="premium-select premium-select-sm w-full">
-<option value="">All Makes</option>
-</select>
+<div class="relative">
+  <button id="makeBtn" type="button" class="premium-select premium-select-sm w-full text-left" aria-controls="makeDropdown" aria-expanded="false" onclick="toggleMakeDropdown()">All Makes</button>
+  <div id="makeDropdown" class="hidden absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg"></div>
 </div>
+</div>
+
 
 <!-- MODEL -->
 <div>
@@ -2766,6 +2877,93 @@ Model
 <option value="">All Models</option>
 </select>
 </div>
+
+ ${bodyTypeSection(`
+
+<div
+id="bodyTilesFull"
+class="
+grid
+grid-cols-2
+gap-2
+"
+>
+
+${[
+"SUV",
+"Crossover",
+"Sedan",
+"Hatchback",
+"Liftback",
+"Fastback",
+"Coupe",
+"Convertible",
+"Wagon",
+"Estate",
+"MPV",
+"Minivan",
+"Panel Van",
+"Van",
+"Bakkie",
+"Single Cab",
+"Extended Cab",
+"Double Cab",
+"Crew Cab",
+"Chassis Cab",
+"Bus",
+"Light Truck",
+"Heavy Truck",
+"Tipper",
+"Flatbed",
+"Dropside",
+"Car Carrier",
+"Lowbed",
+"Refrigerated Truck",
+"Horse & Livestock",
+"Truck Tractor",
+"Motorhome",
+"Camper"
+].map(type => `
+
+<div
+class="
+body-tile
+h-11
+rounded-xl
+border
+border-slate-200
+bg-white
+px-3
+text-center
+cursor-pointer
+transition-all
+hover:border-[#E48A2F]
+flex
+items-center
+justify-center
+"
+data-value="${type}"
+onclick="selectBody('${type}')"
+>
+
+<div
+class="
+body-tile-label
+text-sm
+font-medium
+whitespace-nowrap
+"
+>
+${type}
+</div>
+
+</div>
+
+`).join("")}
+
+</div>
+
+`)}
 
 <!-- YEAR -->
 <div>
@@ -2781,19 +2979,6 @@ ${Array.from({length:26},(_,i)=>2025-i).map(year=>`<option value="${year}">${yea
 <option value="">To</option>
 ${Array.from({length:26},(_,i)=>2025-i).map(year=>`<option value="${year}">${year}</option>`).join("")}
 </select>
-</div>
-</div>
-
-<!-- BODY TYPE -->
-<div>
-<label class="block text-[11px] font-medium uppercase tracking-[0.15em] text-slate-500 mb-2 font-semibold">
-Body Type
-</label>
-<div id="bodyTiles" class="grid grid-cols-2 gap-2">
-${["SUV","Crossover","Sedan","Hatchback","Coupe","Convertible","Wagon","MPV","Van","Bakkie","Double Cab","Light Truck","Bus","Motorhome","Camper"].map(type => `
-<div class="body-tile h-10 rounded-xl border border-slate-200 bg-white px-2 text-center cursor-pointer transition-all hover:border-[#E48A2F] flex items-center justify-center" data-value="${type}" onclick="selectBody('${type}')">
-<div class="body-tile-label text-xs font-medium">${type}</div>
-</div>`).join("")}
 </div>
 </div>
 
@@ -3172,92 +3357,6 @@ w-full
 `)}
 
 
- ${section("Body Type", `
-
-<div
-id="bodyTilesFull"
-class="
-grid
-grid-cols-2
-gap-2
-"
->
-
-${[
-"SUV",
-"Crossover",
-"Sedan",
-"Hatchback",
-"Liftback",
-"Fastback",
-"Coupe",
-"Convertible",
-"Wagon",
-"Estate",
-"MPV",
-"Minivan",
-"Panel Van",
-"Van",
-"Bakkie",
-"Single Cab",
-"Extended Cab",
-"Double Cab",
-"Crew Cab",
-"Chassis Cab",
-"Bus",
-"Light Truck",
-"Heavy Truck",
-"Tipper",
-"Flatbed",
-"Dropside",
-"Car Carrier",
-"Lowbed",
-"Refrigerated Truck",
-"Horse & Livestock",
-"Truck Tractor",
-"Motorhome",
-"Camper"
-].map(type => `
-
-<div
-class="
-body-tile
-h-11
-rounded-xl
-border
-border-slate-200
-bg-white
-px-3
-text-center
-cursor-pointer
-transition-all
-hover:border-[#E48A2F]
-flex
-items-center
-justify-center
-"
-data-value="${type}"
-onclick="selectBody('${type}')"
->
-
-<div
-class="
-body-tile-label
-text-sm
-font-medium
-whitespace-nowrap
-"
->
-${type}
-</div>
-
-</div>
-
-`).join("")}
-
-</div>
-
-`)}
 
 ${section("Features", `
 
@@ -3991,6 +4090,7 @@ shadow-sm
 sticky
 top-0
 z-20
+browse-results-toolbar
 "
 >
 
@@ -4009,10 +4109,16 @@ Loading vehicles...
 class="
 flex
 items-center
+flex-wrap
 gap-2
 browse-toolbar-actions
 "
 >
+
+<div class="flex shrink-0 items-center gap-1" data-card-detail-selector aria-label="Vehicle card details">
+  <button type="button" data-detail-level="simple" class="rounded-lg border px-2 py-1.5 text-[10px] font-semibold" aria-pressed="true">Simple</button>
+  <button type="button" data-detail-level="detailed" class="rounded-lg border px-2 py-1.5 text-[10px] font-semibold" aria-pressed="false">Detailed</button>
+</div>
 
 <!-- MOBILE FILTERS BUTTON -->
 <button
@@ -4103,6 +4209,7 @@ aria-label="Sort vehicles"
 
 </div>
 
+<div class="flex items-center gap-2 browse-toolbar-view-controls">
 <button
 type="button"
 id="gridViewBtn"
@@ -4218,6 +4325,8 @@ r="1.5"
 />
 </svg>
 </button>
+
+</div>
 
 </div>
 
@@ -4679,7 +4788,7 @@ function buildActiveFilterChips(){
     }
 
     /* PHASE 5: internal ranking/hint objects (e.g. intentPrefs) are
-       never user-facing chips — never render an [object Object]. */
+       never user-facing chips ï¿½ never render an [object Object]. */
     if(typeof value === "object" && value !== null && !Array.isArray(value)){
       return;
     }
@@ -4718,6 +4827,22 @@ function buildActiveFilterChips(){
       Number(value) === 0
     ){
       return;
+    }
+
+    /* Multi-select Make/Body filters are stored as comma-joined strings.
+       Expand them into one removable chip per selected value. */
+    if((key === "make" || key === "body") && typeof value === "string"){
+      const vals = value.split(",").map(v => v.trim()).filter(Boolean);
+      if(vals.length > 1){
+        vals.forEach(v => {
+          chips.push({
+            key,
+            value: v,
+            label: getChipLabel(key, v)
+          });
+        });
+        return;
+      }
     }
 
     if(
@@ -4939,66 +5064,28 @@ window.clearFilter = async function(key,value){
 
     if(key === "make"){
 
-      filters.make = "";
-      filters.model = "";
-      filters.variant = "";
-
-      const make =
-      document.getElementById("make");
-
-      const model =
-      document.getElementById("model");
-
-      const variant =
-      document.getElementById("variant");
-
-      if(make) make.value = "";
-
-      if(model){
-
-        model.innerHTML =
-        '<option value="">All Models</option>';
-
-        model.value = "";
-
+      const vals = String(filters.make || "").split(",").map(v=>v.trim()).filter(Boolean)
+        .filter(v => String(v).toLowerCase() !== String(value).toLowerCase());
+      filters.make = vals.join(",");
+      if(!vals.length){
+        filters.model = "";
+        filters.variant = "";
+        const model = document.getElementById("model");
+        const variant = document.getElementById("variant");
+        if(model){ model.innerHTML = '<option value="">All Models</option>'; model.value = ""; }
+        if(variant){ variant.innerHTML = '<option value="">All Variants</option>'; variant.value = ""; }
       }
-
-      if(variant){
-
-        variant.innerHTML =
-        '<option value="">All Variants</option>';
-
-        variant.value = "";
-
-      }
+      updateMakeButtonLabel();
 
     }
 
-    else if(key === "model"){
+    else if(key === "body"){
 
-      filters.model = "";
-      filters.variant = "";
-
-      const model =
-      document.getElementById("model");
-
-      const variant =
-      document.getElementById("variant");
-
-      if(model){
-        model.value = "";
+      const vals = String(filters.body || "").split(",").map(v=>v.trim()).filter(Boolean)
+        .filter(v => String(v).toLowerCase() !== String(value).toLowerCase());
+      filters.body = vals.join(",");
+      updateBodyTiles();
       }
-
-      if(variant){
-
-        variant.innerHTML =
-        '<option value="">All Variants</option>';
-
-        variant.value = "";
-
-      }
-
-    }
 
     else if(key === "province"){
 
@@ -5167,6 +5254,7 @@ else if(key === "priceMax"){
 window.clearAllFilters = async function(){
 
   reset();
+  updateBodyTiles();
 
   [
     "verifiedDealer",
@@ -5405,7 +5493,7 @@ if(
     }
 
   }catch(e){
-    /* storage unavailable — ignore */
+    /* storage unavailable ï¿½ ignore */
   }
 
 }
@@ -5549,7 +5637,7 @@ window.addEventListener("popstate", async ()=>{
 
     /* PHASE 3 AUDIT: #variant has no visible select in the Browse sidebar
        (make/model are the rendered controls), so this restore must be
-       null-safe — otherwise a back/forward navigation with an active make
+       null-safe ï¿½ otherwise a back/forward navigation with an active make
        filter threw a TypeError and aborted the whole popstate handler
        (vehicleType restore, chips and load() never ran). */
     const variantEl = document.getElementById("variant");
@@ -5608,6 +5696,8 @@ if(
     requestAnimationFrame(init);
     return;
   }
+
+bindMakeDropdownDismissal();
 
 // ðŸ”¥ LOAD UI FIRST (FAST)
 /* PERFORMANCE 
@@ -5745,6 +5835,8 @@ initFeatureSearch();
 
 await applyURLParams();
 
+initCardDetailControls();
+
   /* ðŸ”¥ RESTORE VIEW PREFERENCE (localStorage) */
   const savedView =
   loadViewPreference("browse_view");
@@ -5817,8 +5909,7 @@ await applyURLParams();
 
 if(filters.make){
 
-  document.getElementById("make").value =
-  filters.make;
+  updateMakeButtonLabel();
 
   await fillModels();
 
@@ -5835,7 +5926,7 @@ if(filters.model){
 
 if(filters.variant){
 
-  /* PHASE 3 AUDIT: null-safe restore — #variant is not rendered in
+  /* PHASE 3 AUDIT: null-safe restore ï¿½ #variant is not rendered in
      Browse; the state value still flows through to the query. A URL
      like /browse?variant=X previously threw here and aborted the
      remaining URL-restore work (vehicleType, sliders, chips). */
@@ -5923,8 +6014,7 @@ FINANCE FILTER UI REMOVED
 
 if(filters.make){
 
-  document.getElementById("make").value =
-  filters.make;
+  updateMakeButtonLabel();
 
   await fillModels();
 
@@ -5941,7 +6031,7 @@ if(filters.model){
 
 if(filters.variant){
 
-  /* PHASE 3 AUDIT: null-safe restore (same reason as applyURLParams —
+  /* PHASE 3 AUDIT: null-safe restore (same reason as applyURLParams ï¿½
      #variant is not rendered in Browse). */
   const variantEl = document.getElementById("variant");
   if(variantEl){
@@ -6115,7 +6205,7 @@ function setViewMode(mode){
       mode
     );
   }catch(e){
-    /* storage unavailable — ignore */
+    /* storage unavailable ï¿½ ignore */
   }
 
   render(
@@ -6180,13 +6270,13 @@ async function handleAutocomplete(e){
   const value = input.value.trim();
 
   /* ==========================
-  🔥 PHASE 4 ADDITIVE — KEYBOARD SUGGESTION NAVIGATION
+  ?? PHASE 4 ADDITIVE ï¿½ KEYBOARD SUGGESTION NAVIGATION
   Same interaction model as the Homepage search bar
   (components/searchBar.js): ArrowUp / ArrowDown move a
   highlight across the EXISTING Browse dropdown rows,
   Tab completes the highlighted suggestion into the input
   WITHOUT submitting, Escape closes the dropdown.
-  No new suggestion engine — rows come from getSuggestions().
+  No new suggestion engine ï¿½ rows come from getSuggestions().
   ========================== */
 
   const rows = getBrowseRows();
@@ -6254,7 +6344,7 @@ async function handleAutocomplete(e){
   }
 
   /* ==========================
-  🔥 ENTER = UPDATE BROWSE PIPELINE IN PLACE
+  ?? ENTER = UPDATE BROWSE PIPELINE IN PLACE
   Browse is already the destination.
   ========================== */
   const prediction = getPrediction(value);
@@ -6480,7 +6570,7 @@ function bindEvents(){
   /* PHASE 3: the canonical filter selects were previously wired with
      inline onchange="updateResultsCount();trigger();" attributes. Those
      attributes run against window scope, where trigger() (and reset)
-     do NOT exist because Browse is loaded as a module — so every change
+     do NOT exist because Browse is loaded as a module ï¿½ so every change
      threw a ReferenceError after the count update and the debounced
      filter reload never ran. Bound below as real change listeners (one
      clear event path per control): updateResultsCount() re-syncs the
@@ -6510,52 +6600,54 @@ function bindEvents(){
     });
   });
 
-  // MAKE â†’ MODEL
-document.getElementById("make").onchange = async ()=>{
+  const legacyMakeSelect = document.getElementById("make");
+  if(legacyMakeSelect){
+  legacyMakeSelect.onchange = async ()=>{
 
-  console.log(
-    "MAKE CHANGED TO:",
-    document.getElementById("make").value
-  );
+    console.log(
+      "MAKE CHANGED TO:",
+      legacyMakeSelect.value
+    );
 
-  filters.make =
-  document.getElementById("make").value;
+    filters.make =
+    legacyMakeSelect.value;
 
-  filters.model = "";
-  filters.variant = "";
+    filters.model = "";
+    filters.variant = "";
 
-  await fillModels();
+    await fillModels();
 
-  const model =
-  document.getElementById("model");
+    const model =
+    document.getElementById("model");
 
-  if(model){
-    model.value = "";
+    if(model){
+      model.value = "";
+    }
+
+    const variant =
+    document.getElementById("variant");
+
+    if(variant){
+
+      variant.innerHTML =
+      '<option value="">All Variants</option>'
+
+      variant.value = "";
+
+    }
+
+    updateVehicleSummary();
+
+    updateResultsCount();
+
+    clearTimeout(window.__makeTimer);
+
+    window.__makeTimer = setTimeout(()=>{
+      trigger();
+    },200);
+
+  };
   }
-
-  const variant =
-  document.getElementById("variant");
-
-  if(variant){
-
-    variant.innerHTML =
-    '<option value="">All Variants</option>';
-
-    variant.value = "";
-
-  }
-
-  updateVehicleSummary();
-
-  updateResultsCount();
-
-  clearTimeout(window.__makeTimer);
-
-  window.__makeTimer = setTimeout(()=>{
-    trigger();
-  },200);
-
-};
 
 document.getElementById("province").onchange = async ()=>{
 
@@ -6703,7 +6795,7 @@ if(headerSort){
           headerSort.value
         );
       }catch(e){
-        /* storage unavailable — ignore */
+        /* storage unavailable ï¿½ ignore */
       }
 
       trigger();
@@ -6928,7 +7020,7 @@ console.log("MAKE DROPDOWN VALUE:", val("make"));
      An empty sidebar control must never wipe a filter that came from
      the search bar / shared intent layer. Sidebar selections still win
      whenever they carry a real value, so both input methods compose. */
-  filters.make = val("make") || filters.make || "";
+  filters.make = filters.make || "";
   filters.model = val("model") || filters.model || "";
 
   filters.priceMin = priceMin;
@@ -7163,7 +7255,7 @@ function applySearchIntentToFilters(){
 
   /* PHASE 3: the shared intent layer is deterministic and gap-filling, so
      once a query text has been interpreted it must not be re-parsed on
-     every hop of the same interaction (count debounce → trigger → load).
+     every hop of the same interaction (count debounce ? trigger ? load).
      Re-parse only when the query text actually changes. This also stops
      STALE search text from silently overwriting an explicit user
      selection made AFTER the intent was already materialised. */
@@ -7177,7 +7269,7 @@ function applySearchIntentToFilters(){
     /* Remember the RESIDUAL query (the text actually kept in filters.q
        after recognised concepts are stripped) as the applied marker so
        subsequent hops inside the same interaction skip. When parsing
-       fails we remember the raw text instead — the unparseable input
+       fails we remember the raw text instead ï¿½ the unparseable input
        stays in filters.q and must not be re-parsed repeatedly. */
     lastAppliedIntentParsedFor =
       intent ? (intent.cleanedQuery || "") : currentQuery;
@@ -7203,7 +7295,7 @@ function applySearchIntentToFilters(){
        Explicit constraints ("under/below/up to/max", ranges)
        become real hard filters through the existing
        priceMin/priceMax pipeline; approximate prices become a
-       proportional ±20% band around the target. */
+       proportional ï¿½20% band around the target. */
     const p = intent.price;
     if(p){
       if(p.kind === "max" && p.max){ priceMax = p.max; }
@@ -7240,14 +7332,14 @@ function applySearchIntentToFilters(){
     if(intent.flags.owners && !filters.owners) filters.owners = intent.flags.owners;
 
     /* ---------- PHASE 2 ADDITIVE gap-fills ---------- */
-    /* mileage intent → existing mileage filter (lte ceiling) */
+    /* mileage intent ? existing mileage filter (lte ceiling) */
     if(intent.mileageMax && !filters.mileage){
       filters.mileage = String(intent.mileageMax);
     }
-    /* location intent → existing province/city filters */
+    /* location intent ? existing province/city filters */
     if(intent.province && !filters.province) filters.province = intent.province;
     if(intent.city && !filters.city) filters.city = intent.city;
-    /* full service history wording → existing boolean filter */
+    /* full service history wording ? existing boolean filter */
     if(intent.flags.fullServiceHistory && !filters.serviceHistory){
       filters.serviceHistory = true;
     }
@@ -7933,7 +8025,7 @@ updateListingTiles();
    placeholder whenever all filters are cleared. */
 populateCities("");
 
-  /* PHASE 2: visual reset — the sort dropdown and owner/history/
+  /* PHASE 2: visual reset ï¿½ the sort dropdown and owner/history/
      condition tiles return to their default state to match filters.sort
      and the cleared filter state. */
   const resetSortEl =
@@ -7952,32 +8044,251 @@ updateConditionButtons();
 
 async function fillMakes(){
 
-  const make =
-  document.getElementById("make");
+  const dd = document.getElementById("makeDropdown");
+  if(!dd) return;
 
-  if(!make) return;
+  let counts = {};
+  try {
+    counts = await getVehicleMakeCounts({ scope: "public" }) || {};
+  } catch(e) {
+    counts = {};
+  }
+  window.browseMakeCounts = counts;
+  window.browseMakeNames = Object.keys(counts).sort((a,b)=>a.localeCompare(b));
 
-  make.innerHTML = `
-    <option value="">
-      All Makes
-    </option>
-  `;
+  if(!window.makePending) window.makePending = new Set();
+  if(filters.make){
+    window.makePending = new Set(String(filters.make).split(",").map(v=>v.trim()).filter(Boolean));
+  } else {
+    window.makePending = new Set();
+  }
 
-  const makes =
-  await memoGetMakes();
+  updateMakeButtonLabel();
 
-  makes.forEach(name=>{
+}
 
-    const option =
-    document.createElement("option");
+function injectBrowseMakeStyles(){
+  if(document.getElementById("browseMakeStyles")) return;
+  const style = document.createElement("style");
+  style.id = "browseMakeStyles";
+  style.textContent = `
+.hfc-make-wrap { display:flex; flex-direction:column; gap:8px; padding:10px; }
+.hfc-make-search { width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px; }
+.hfc-make-list { max-height: 260px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+.hfc-make-row { display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px; cursor:pointer; }
+.hfc-make-row:hover { background:#f1f5f9; }
+.hfc-make-row input { margin:0; }
+.hfc-make-row span:nth-child(2) { flex:1; font-size:14px; color:#0f172a; }
+.hfc-make-count { font-size:12px; color:#64748b; font-weight:600; }
+.hfc-make-actions { display:flex; gap:8px; justify-content:flex-end; padding-top:6px; border-top:1px solid #e2e8f0; }
+`;
+  document.head.appendChild(style);
+}
 
-    option.value = name;
-    option.textContent = name;
+function closeMakeDropdown(restoreFocus = false){
+  const dd = document.getElementById("makeDropdown");
+  const button = document.getElementById("makeBtn");
+  if(!dd) return;
+  dd.classList.add("hidden");
+  if(button) button.setAttribute("aria-expanded", "false");
+  if(restoreFocus && button) button.focus();
+}
 
-    make.appendChild(option);
+function bindMakeDropdownDismissal(){
+  if(window.__browseMakeDropdownDismissalBound) return;
+  window.__browseMakeDropdownDismissalBound = true;
 
+  document.addEventListener("click", (event) => {
+    const dd = document.getElementById("makeDropdown");
+    const button = document.getElementById("makeBtn");
+    if(!dd || dd.classList.contains("hidden")) return;
+    const target = event.target;
+    if(dd.contains(target) || button?.contains(target)) return;
+    closeMakeDropdown();
   });
 
+  document.addEventListener("keydown", (event) => {
+    const dd = document.getElementById("makeDropdown");
+    if(event.key !== "Escape" || !dd || dd.classList.contains("hidden")) return;
+    event.preventDefault();
+    closeMakeDropdown(true);
+  });
+}
+
+window.toggleMakeDropdown = function(){
+  const dd = document.getElementById("makeDropdown");
+  if(!dd) return;
+  const button = document.getElementById("makeBtn");
+  injectBrowseMakeStyles();
+  if(dd.classList.contains("hidden")){
+    if(filters.make){
+      window.makePending = new Set(String(filters.make || "").split(",").map(v=>v.trim()).filter(Boolean));
+    } else {
+      window.makePending = new Set();
+    }
+    renderMakeDropdown();
+    dd.classList.remove("hidden");
+    if(button) button.setAttribute("aria-expanded", "true");
+  } else {
+    closeMakeDropdown();
+  }
+};
+
+function renderMakeDropdown(){
+  const dd = document.getElementById("makeDropdown");
+  if(!dd) return;
+  const options = window.browseMakeNames || [];
+  const counts = window.browseMakeCounts || {};
+  if(!window.makePending) window.makePending = new Set();
+  let query = "";
+  dd.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "hfc-make-wrap";
+
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Search makes...";
+  search.className = "hfc-make-search";
+  search.addEventListener("input", () => { query = search.value; renderList(); });
+  search.addEventListener("keydown", (e) => { if(e.key === "Enter") e.preventDefault(); });
+  wrap.appendChild(search);
+
+  const anyRow = document.createElement("label");
+  anyRow.className = "hfc-make-row";
+  const anyCb = document.createElement("input");
+  anyCb.type = "checkbox";
+  anyCb.checked = (window.makePending.size > 0 && window.makePending.size === options.length);
+  anyCb.addEventListener("change", () => {
+    if(anyCb.checked){
+      window.makePending = new Set(options);
+    } else {
+      window.makePending.clear();
+    }
+    renderList();
+  });
+  const anyLabel = document.createElement("span");
+  anyLabel.textContent = "All";
+  const anyCount = document.createElement("span");
+  anyCount.className = "hfc-make-count";
+  anyCount.textContent = "";
+  anyRow.append(anyCb, anyLabel, anyCount);
+  wrap.appendChild(anyRow);
+
+  const list = document.createElement("div");
+  list.className = "hfc-make-list";
+  wrap.appendChild(list);
+
+  function renderList(){
+    list.innerHTML = "";
+    const q = query.toLowerCase().trim();
+    let filtered = options;
+    if(q) filtered = options.filter(m => String(m).toLowerCase().includes(q));
+    if(!filtered.length){
+      const empty = document.createElement("div");
+      empty.className = "hfc-empty";
+      empty.textContent = "No makes match";
+      list.appendChild(empty);
+      return;
+    }
+    filtered.forEach(m => {
+      const mv = String(m);
+      const row = document.createElement("label");
+      row.className = "hfc-make-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = window.makePending.has(mv);
+      cb.addEventListener("change", () => {
+        if(cb.checked){ window.makePending.add(mv); }
+        else { window.makePending.delete(mv); }
+        anyCb.checked = (window.makePending.size > 0 && window.makePending.size === options.length);
+        renderList();
+      });
+      const name = document.createElement("span");
+      name.textContent = mv;
+      const cnt = document.createElement("span");
+      cnt.className = "hfc-make-count";
+      cnt.textContent = `(${counts[mv] || 0})`;
+      row.append(cb, name, cnt);
+      list.appendChild(row);
+    });
+    anyCb.checked = (window.makePending.size > 0 && window.makePending.size === options.length);
+  }
+  renderList();
+
+  const actions = document.createElement("div");
+  actions.className = "hfc-make-actions";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.textContent = "Reset";
+  resetBtn.className = "hfc-clear";
+  resetBtn.onclick = function(e){
+    if(e) e.preventDefault();
+    try {
+      window.makePending = new Set();
+      renderList();
+    } catch(err){
+      console.error("Browse make reset failed", err);
+    }
+    return false;
+  };
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.textContent = "Apply";
+  applyBtn.className = "hfc-opt hfc-selected";
+  applyBtn.onclick = async function(e){
+    if(e) e.preventDefault();
+    try {
+      await applyBrowseMakeSelection();
+      closeMakeDropdown();
+    } catch(err){
+      console.error("Browse make apply failed", err);
+    }
+    return false;
+  };
+  actions.append(resetBtn, applyBtn);
+  wrap.appendChild(actions);
+
+  dd.appendChild(wrap);
+  setTimeout(() => search.focus(), 0);
+}
+
+async function applyBrowseMakeSelection(){
+  const vals = [...(window.makePending || new Set())];
+  filters.make = vals.join(",");
+  const modelEl = document.getElementById("model");
+  const currentModel = modelEl ? modelEl.value : (filters.model || "");
+  if(vals.length){
+    const modelSets = await Promise.all(vals.map(m => memoGetModels(m).catch(()=>[])));
+    const validModels = [...new Set(modelSets.flat())];
+    if(currentModel && !validModels.includes(currentModel)){
+      filters.model = "";
+      if(modelEl) modelEl.value = "";
+    } else {
+      filters.model = currentModel || filters.model || "";
+    }
+    if(modelEl){
+      modelEl.innerHTML = '<option value="">All Models</option>';
+      validModels.forEach(x=>{
+        const o = document.createElement("option");
+        o.value = x; o.textContent = x;
+        if(x === filters.model) o.selected = true;
+        modelEl.appendChild(o);
+      });
+    }
+  } else {
+    filters.model = currentModel || filters.model || "";
+  }
+  lastAppliedIntentParsedFor = filters.q || lastAppliedIntentParsedFor;
+  updateMakeButtonLabel();
+  updateVehicleSummary();
+  await trigger();
+}
+
+function updateMakeButtonLabel(){
+  const btn = document.getElementById("makeBtn");
+  if(!btn) return;
+  const vals = String(filters.make || "").split(",").map(v=>v.trim()).filter(Boolean);
+  btn.textContent = vals.length ? vals.join(", ") : "All Makes";
 }
 
 async function populateCities(province){
@@ -8000,7 +8311,7 @@ async function populateCities(province){
 
   }
 
-  /* DB-backed catalogue (js/catalog.js) — same source of truth
+  /* DB-backed catalogue (js/catalog.js) ï¿½ same source of truth
      as upload & manage. Async so the list loads without
      blocking the rest of Browse. */
   city.disabled = false;
@@ -8104,7 +8415,7 @@ async function fillProvinces(){
 
 async function fillModels(){
 
-  const make = val("make");
+  const make = filters.make ? String(filters.make).split(",")[0].trim() : "";
   const model = document.getElementById("model");
 
   if(!model) return;
@@ -8142,7 +8453,7 @@ async function fillVariants(){
   '<option value="">All Variants</option>';
 
   const make =
-  document.getElementById("make")?.value;
+  filters.make ? String(filters.make).split(",")[0].trim() : "";
 
   const model =
   document.getElementById("model")?.value;
@@ -8812,7 +9123,7 @@ if(!box.children.length){
   render(null);
 }
 
-/* PHASE 5 — stale-while-revalidate fast path.
+/* PHASE 5 ï¿½ stale-while-revalidate fast path.
    Cache hit for the exact filters/sort/page signature:
    show cached public vehicles immediately, then refresh
    in the background. Cache the raw vehicle array (not HTML)
@@ -8944,7 +9255,7 @@ const rankingInputsPromise =
   query = buildVehicleQuery(query, filters);
 
   /* =========================================
-  ðŸ”¥ SORT — driven by the shared sort registry
+  ðŸ”¥ SORT ï¿½ driven by the shared sort registry
   ========================================= */
   const orderClause = getSupabaseOrder(filters.sort);
 
@@ -8968,7 +9279,7 @@ const rankingInputsPromise =
   Reuses the existing exact-count architecture from
   updateResultsCount() and runs in PARALLEL with the
   page data query. The total drives pagination and
-  result metadata only — page rendering stays limited
+  result metadata only ï¿½ page rendering stays limited
   to the intended page size.
   ============================================= */
   const countQuery = buildVehicleQuery(
@@ -8978,7 +9289,7 @@ const rankingInputsPromise =
     filters
   );
 
-  /* P5-2: Request coalescing — reuse an in-flight request for the
+  /* P5-2: Request coalescing ï¿½ reuse an in-flight request for the
      exact same Browse state (filters + sort + page + limit) so that
      duplicate simultaneous triggers issue only ONE Supabase call.
      The in-flight entry is always removed in finally so a later
@@ -9004,7 +9315,7 @@ const rankingInputsPromise =
   }
   const [{ data, error }, countResult] = await p52Req;
 
-  /* Null means the count query failed — the caller falls back so a
+  /* Null means the count query failed ï¿½ the caller falls back so a
      transient count failure never blocks the search itself. */
   filteredTotal =
     (countResult && typeof countResult.count === "number" && countResult.count >= 0)
@@ -9276,7 +9587,7 @@ const rankingInputsPromise =
     });
 
     /* =========================================
-    ðŸ”¥ SORT — driven by the shared sort registry
+    ðŸ”¥ SORT ï¿½ driven by the shared sort registry
     This is the FINAL sort, applied immediately
     before rendering.  It must always run last so
     the user's selected sort order is preserved.
@@ -9343,7 +9654,7 @@ render(ranked);
 /* PHASE 2: pagination + result metadata use the exact server-side
    filtered total (never the current page length). */
 if(typeof filteredTotal !== "number" || filteredTotal < 0){
-  /* count query unavailable → fall back to the current page length */
+  /* count query unavailable ? fall back to the current page length */
   filteredTotal = ranked.length;
 }
 
@@ -9682,7 +9993,9 @@ toggleOptions(
   [...new Set(driveData.map(v => String(v.drive_type || "").trim()))]
 );
 
-updateBodyTileCounts(countMap(bodyData, "body_type"));
+let __browseBodyCounts = {};
+try { __browseBodyCounts = await getVehicleBodyCounts({ scope: "public" }) || {}; } catch(e){ __browseBodyCounts = countMap(bodyData, "body_type"); }
+updateBodyTileCounts(__browseBodyCounts);
 }
 
 async function updateDynamicFilters(){
@@ -10157,7 +10470,8 @@ ${match}% Match
         actions: "browse",
         saved,
         highlight,
-        extraBadge: eligibilityBadge
+        extraBadge: eligibilityBadge,
+        detailLevel: getCardDetailLevel()
       });
 
     }
@@ -10167,7 +10481,8 @@ ${match}% Match
       actions: "browse",
       saved,
       highlight,
-      extraBadge: eligibilityBadge
+      extraBadge: eligibilityBadge,
+      detailLevel: getCardDetailLevel()
     });
 
 }
@@ -10180,6 +10495,33 @@ box.innerHTML = list
   .map((vehicle, index) => renderCard(vehicle, index))
   .join("");
 
+}
+
+function syncCardDetailControls(level = getCardDetailLevel()){
+  document.querySelectorAll("[data-card-detail-selector] [data-detail-level]").forEach((button)=>{
+    const active = button.dataset.detailLevel === level;
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("bg-[#3B82F6]", active);
+    button.classList.toggle("text-white", active);
+    button.classList.toggle("border-[#3B82F6]", active);
+    button.classList.toggle("bg-white", !active);
+    button.classList.toggle("text-slate-700", !active);
+    button.classList.toggle("border-slate-200", !active);
+  });
+}
+
+function initCardDetailControls(){
+  syncCardDetailControls();
+  if(!cardDetailListenerReady){
+    cardDetailListenerReady = true;
+    window.addEventListener(CARD_DETAIL_CHANGE_EVENT, (event)=>{
+      const level = event.detail?.level || getCardDetailLevel();
+      syncCardDetailControls(level);
+    });
+  }
+  document.querySelectorAll("[data-card-detail-selector] [data-detail-level]").forEach((button)=>{
+    button.addEventListener("click", ()=>setCardDetailLevel(button.dataset.detailLevel));
+  });
 }
 
 /* ========================== */
@@ -10740,7 +11082,7 @@ window.selectBrowseSuggestion = function(type, value, label, make, model){
 
   } else {
 
-    /* Simple suggestion — treat as search query */
+    /* Simple suggestion ï¿½ treat as search query */
     input.value = value;
     filters.q = value;
 
@@ -10930,7 +11272,7 @@ function updateVehicleSummary(){
   box.classList.remove("hidden");
 
   text.innerText =
-  parts.join(" • ");
+  parts.join(" ï¿½ ");
 
 }
 
@@ -11022,11 +11364,11 @@ function updateHistoryTiles(){
 
 window.selectBody = function(type){
 
-  if(filters.body === type){
-    filters.body = "";
-  } else {
-    filters.body = type;
-  }
+  const current = String(filters.body || "").split(",").map(v=>v.trim()).filter(Boolean);
+const idx = current.indexOf(type);
+  if(idx >= 0) current.splice(idx,1);
+  else current.push(type);
+  filters.body = current.join(",");
 
   updateBodyTiles();
 
@@ -11124,8 +11466,13 @@ function updateBodyTiles(){
 
     const val = tile.dataset.value;
 
-    const selected =
-      val === filters.body;
+const selectedVals = String(filters.body || "").split(",").map(v=>v.trim().toLowerCase()).filter(Boolean);
+    const selected = selectedVals.includes(String(val || "").trim().toLowerCase());
+
+    tile.classList.toggle(
+      "active",
+      selected
+    );
 
     tile.classList.toggle(
       "border-[#E48A2F]",
@@ -11170,10 +11517,30 @@ function updateBodyTileCounts(map){
   document.querySelectorAll(".body-tile").forEach(tile=>{
 
     const val = tile.dataset.value;
-    const count = map[val] || 0;
+
+    const normalizedVal = String(val || "").trim().toLowerCase();
+    const aliases = {
+      "convertible": "cabriolet / convertible",
+      "wagon": "station wagon",
+      "estate": "station wagon"
+    };
+    const lookupVal = aliases[normalizedVal] || normalizedVal;
+
+    let count = 0;
+    for (const k of Object.keys(map || {})) {
+      if (String(k || "").trim().toLowerCase() === lookupVal) {
+        count = map[k] || 0;
+        break;
+      }
+    }
 
     /* ðŸ”¥ SHOW LABEL ONLY */
-    tile.innerText = val;
+    const labelEl = tile.querySelector(".body-tile-label");
+    if (labelEl) {
+      labelEl.textContent = val + " (" + count + ")";
+    } else {
+      tile.textContent = val + " (" + count + ")";
+    }
 
     /* ðŸ”¥ DISABLE IF ZERO */
     tile.style.opacity = count === 0 ? "0.4" : "1";
@@ -11190,7 +11557,7 @@ const impressionCache = new Set();
 
 async function trackVehicleImpression(vehicle){
 
-/* PHASE 2 — CONSENT GATE. Impression analytics are an
+/* PHASE 2 ï¿½ CONSENT GATE. Impression analytics are an
    optional feature; they only run when the user allowed
    the "Analytics & performance" category. */
 if(!isAllowed("analytics")){

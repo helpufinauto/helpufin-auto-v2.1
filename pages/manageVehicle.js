@@ -42,6 +42,759 @@ getEvRanges,
 getChargingTimes,
 } from "../js/catalog.js";
 
+/* PHASE 5 — temporary EDIT draft persistence for Manage Vehicle.
+Uses the SAME shared draft store as Upload Vehicle and Messages
+(read-only import: js/draftStore.js is NOT modified), but with its
+own workflow + user+vehicle key, so create drafts, signup drafts
+and message drafts can never collide with an edit draft. */
+import {
+saveDraft as saveManageVehicleEditDraftRecord,
+loadDraft as loadManageVehicleEditDraftRecord,
+clearDraft as clearManageVehicleEditDraftRecord
+} from "../js/draftStore.js";
+
+/* =========================================================
+PHASE 5 — MANAGE VEHICLE / EDIT VEHICLE TEMPORARY DRAFT
+=========================================================
+A Manage Vehicle (Edit Vehicle) workspace edits an EXISTING,
+already published vehicle row. Two things stay strictly separate:
+
+1. the PUBLISHED vehicle row (Supabase) — only ever written by the
+   existing saveVehicleChanges() / image actions;
+2. the TEMPORARY edit draft (sessionStorage) — unfinished form
+   values only, never written to Supabase until the user presses
+   the existing "Save Changes" action.
+
+Storage: js/draftStore.js
+  key  hufa:draft:manageVehicleEdit:u_<userId>_v_<vehicleId>
+Scoping: authenticated user AND vehicle, so two different vehicles
+(or two different users) never share an edit draft.
+Lifecycle:
+  • values are collected from the live workspace form, debounced,
+    and written after typing stops;
+  • a pending write is flushed synchronously on pagehide (refresh /
+    tab close) and on in-app navigation clicks (SPA pushState does
+    not fire pagehide);
+  • the draft is re-applied after the workspace has been fully
+    initialized (all cascade option lists present) on every mount,
+    so refresh / route change / remount restores unfinished values;
+  • the draft is cleared ONLY after a successful Save Changes.
+No image state is stored here: Manage Vehicle image actions
+(upload / reorder / cover / replace / delete) already persist
+immediately through their existing functions.
+========================================================= */
+
+const MANAGE_VEHICLE_EDIT_DRAFT_WORKFLOW = "manageVehicleEdit";
+
+/* Same debounce feel as the other draft-enabled workflows. */
+const MANAGE_VEHICLE_EDIT_DRAFT_SAVE_DELAY_MS = 500;
+
+/* Every editable control that belongs to the Manage Vehicle /
+Edit Vehicle workspace form. Used for BOTH collection and the
+restore allowlist, so no field is silently omitted. */
+const MANAGE_VEHICLE_EDIT_DRAFT_FIELD_IDS = [
+  "vehicle_title",
+  "vehicle_price",
+  "vehicle_year",
+  "vehicle_mileage",
+  "vehicle_finance_available",
+  "vehicle_price_negotiable",
+  "vehicle_vat_included",
+  "vehicle_status",
+  "vehicle_province",
+  "vehicle_city",
+  "vehicle_category",
+  "vehicle_commercial_category",
+  "vehicle_cab_configuration",
+  "vehicle_payload_capacity",
+  "vehicle_towing_capacity",
+  "vehicle_motorcycle_type",
+  "vehicle_make",
+  "vehicle_model",
+  "vehicle_variant",
+  "vehicle_owners",
+  "vehicle_description",
+  "vehicle_note_input",
+  "spec_fuel_type",
+  "spec_transmission",
+  "spec_drive_type",
+  "spec_body_type",
+  "spec_color",
+  "spec_engine_capacity_cc",
+  "spec_power_kw",
+  "spec_engine_size_l",
+  "spec_torque_nm",
+  "spec_cylinders",
+  "spec_turbocharged",
+  "spec_fuel_consumption_l100",
+  "spec_co2_emissions_gkm",
+  "spec_electric_range_km",
+  "spec_fast_charge",
+  "spec_seats",
+  "spec_doors",
+  "spec_condition",
+  "ev_battery_capacity",
+  "ev_range",
+  "ev_charging_time"
+];
+
+const MANAGE_VEHICLE_EDIT_DRAFT_FIELD_ID_SET =
+new Set(MANAGE_VEHICLE_EDIT_DRAFT_FIELD_IDS);
+
+/* Fields whose value depends on another control's option list:
+they are applied AFTER the plain fields, in cascade order
+(category → commercial cascade, fuel type → EV fields,
+make → model → variant, province → city). */
+const MANAGE_VEHICLE_EDIT_DRAFT_CASCADE_IDS = new Set([
+  "vehicle_make",
+  "vehicle_model",
+  "vehicle_variant",
+  "vehicle_province",
+  "vehicle_city",
+  "vehicle_category",
+  "vehicle_commercial_category",
+  "vehicle_cab_configuration",
+  "vehicle_payload_capacity",
+  "vehicle_towing_capacity",
+  "vehicle_motorcycle_type",
+  "spec_fuel_type",
+  "ev_battery_capacity",
+  "ev_range",
+  "ev_charging_time"
+]);
+
+const MANAGE_VEHICLE_EDIT_DRAFT_PLAIN_IDS =
+MANAGE_VEHICLE_EDIT_DRAFT_FIELD_IDS.filter(
+  id => !MANAGE_VEHICLE_EDIT_DRAFT_CASCADE_IDS.has(id)
+);
+
+/* ---------- module state (one Manage Vehicle session) ---------- */
+
+let manageVehicleBootSeq = 0;
+
+let manageVehicleDraftVehicleId = "";
+let manageVehicleDraftUserIdCache = "";
+let manageVehicleDraftSaveTimer = null;
+let manageVehicleDraftPendingVehicleId = "";
+let manageVehicleDraftRestoring = false;
+
+
+/* Same sanitization contract as draftStore's internal
+sanitizeKeyPart (identity parts used inside one key). */
+function sanitizeManageVehicleDraftKeyPart(value){
+  const raw = String(value || "").trim();
+  if(!raw){ return ""; }
+  const cleaned = raw.replace(/[^A-Za-z0-9-_]/g, "_").slice(0, 80);
+  return cleaned.replace(/^_+|_+$/g, "") || "";
+}
+
+/* Stable draft identity: authenticated user + vehicle being
+edited. Returns null when either part is unknown, so a draft can
+never be written under a shared/anonymous key. */
+function manageVehicleDraftKeyParts(vehicleId){
+  const userKey =
+  sanitizeManageVehicleDraftKeyPart(manageVehicleDraftUserIdCache);
+  const vehicleKey =
+  sanitizeManageVehicleDraftKeyPart(
+    vehicleId || manageVehicleDraftVehicleId
+  );
+  if(!userKey || !vehicleKey){ return null; }
+  return {
+    workflow: MANAGE_VEHICLE_EDIT_DRAFT_WORKFLOW,
+    userKey: `u_${userKey}_v_${vehicleKey}`
+  };
+}
+
+/* The draft may only be written while the workspace of the SAME
+vehicle is actually mounted (never from another route). */
+function manageVehicleDraftDomIsLive(vehicleId){
+  if(!vehicleId || vehicleId !== manageVehicleDraftVehicleId){
+    return false;
+  }
+  const root = document.getElementById("manageVehicleRoot");
+  if(!root){ return false; }
+  return !!(document.getElementById("vehicle_title") ||
+    document.getElementById("vehicle_description"));
+}
+
+/* ---------- collect / validate ---------- */
+
+function collectManageVehicleEditDraftFeatures(){
+  const container =
+  document.getElementById("vehicle_features_container");
+  if(!container){ return []; }
+  return [
+    ...new Set(
+      Array.from(
+        container.querySelectorAll("input[type='checkbox']:checked")
+      )
+      .map(item=>String(item.value).trim())
+      .filter(Boolean)
+    )
+  ];
+}
+
+function collectManageVehicleEditDraft(){
+  const fields = {};
+  for(const id of MANAGE_VEHICLE_EDIT_DRAFT_FIELD_IDS){
+    const el = document.getElementById(id);
+    /* A field that is not in the DOM is SKIPPED (never recorded as
+       ""), so restore can never blank a published value it could
+       not read. */
+    if(!el || typeof el.value !== "string"){ continue; }
+    fields[id] = el.value;
+  }
+  return {
+    fields,
+    features: collectManageVehicleEditDraftFeatures()
+  };
+}
+
+/* Allowlist guard: only known field ids with string values and a
+string feature list may be applied to the form. Anything else is
+rejected outright so no unsafe data can reach the DOM. */
+function isSafeManageVehicleEditDraft(value){
+  if(!value || typeof value !== "object" || Array.isArray(value)){
+    return false;
+  }
+  const fields = value.fields;
+  if(!fields || typeof fields !== "object" || Array.isArray(fields)){
+    return false;
+  }
+  for(const key of Object.keys(fields)){
+    if(!MANAGE_VEHICLE_EDIT_DRAFT_FIELD_ID_SET.has(key)){
+      return false;
+    }
+    if(typeof fields[key] !== "string"){ return false; }
+  }
+  if(!Array.isArray(value.features)){ return false; }
+  for(const feature of value.features){
+    if(typeof feature !== "string"){ return false; }
+  }
+  return true;
+}
+
+
+/* ---------- write (debounced + flushable) ---------- */
+
+function writeManageVehicleEditDraftNow(vehicleId){
+  const target = vehicleId || manageVehicleDraftPendingVehicleId;
+  if(!target){ return false; }
+  if(!manageVehicleDraftDomIsLive(target)){ return false; }
+  const parts = manageVehicleDraftKeyParts(target);
+  if(!parts){ return false; }
+  return saveManageVehicleEditDraftRecord(
+    parts.workflow,
+    parts.userKey,
+    collectManageVehicleEditDraft()
+  );
+}
+
+async function resolveManageVehicleDraftUserId(){
+  if(manageVehicleDraftUserIdCache){
+    return manageVehicleDraftUserIdCache;
+  }
+  try{
+    const user = await getAuthUser();
+    const id = user?.id;
+    if(typeof id === "string" && id){
+      manageVehicleDraftUserIdCache = id;
+      return id;
+    }
+  }catch(e){}
+  return "";
+}
+
+async function saveManageVehicleEditDraftNow(){
+  if(manageVehicleDraftRestoring){ return; }
+  const vehicleId =
+  manageVehicleDraftPendingVehicleId || manageVehicleDraftVehicleId;
+  if(!vehicleId){ return; }
+  /* Synchronous when the user id is already known (the normal
+     case: the workspace resolved it during load). */
+  if(manageVehicleDraftUserIdCache){
+    writeManageVehicleEditDraftNow(vehicleId);
+    return;
+  }
+  const userId = await resolveManageVehicleDraftUserId();
+  if(!userId){ return; }
+  writeManageVehicleEditDraftNow(vehicleId);
+}
+
+function scheduleManageVehicleEditDraftSave(){
+  if(manageVehicleDraftRestoring){ return; }
+  if(!manageVehicleDraftVehicleId){ return; }
+  if(!document.getElementById("manageVehicleRoot")){ return; }
+  manageVehicleDraftPendingVehicleId = manageVehicleDraftVehicleId;
+  if(manageVehicleDraftSaveTimer){
+    clearTimeout(manageVehicleDraftSaveTimer);
+  }
+  manageVehicleDraftSaveTimer = setTimeout(()=>{
+    manageVehicleDraftSaveTimer = null;
+    saveManageVehicleEditDraftNow();
+  }, MANAGE_VEHICLE_EDIT_DRAFT_SAVE_DELAY_MS);
+}
+
+/* Flush a pending debounced write immediately (pagehide / SPA nav
+click). Writes SYNCHRONOUSLY when the user id is cached so the
+value always lands before the form DOM disappears. */
+function flushManageVehicleEditDraftNow(){
+  if(!manageVehicleDraftSaveTimer){ return; }
+  clearTimeout(manageVehicleDraftSaveTimer);
+  manageVehicleDraftSaveTimer = null;
+  const vehicleId =
+  manageVehicleDraftPendingVehicleId || manageVehicleDraftVehicleId;
+  if(manageVehicleDraftUserIdCache){
+    writeManageVehicleEditDraftNow(vehicleId);
+    return;
+  }
+  saveManageVehicleEditDraftNow();
+}
+
+/* Cancels any pending write first, so nothing can re-save the
+draft after it has been cleared (successful save). */
+function clearManageVehicleEditDraft(vehicleId){
+  if(manageVehicleDraftSaveTimer){
+    clearTimeout(manageVehicleDraftSaveTimer);
+    manageVehicleDraftSaveTimer = null;
+  }
+  manageVehicleDraftPendingVehicleId = "";
+  const userId = sanitizeManageVehicleDraftKeyPart(
+    manageVehicleDraftUserIdCache
+  );
+  const target = sanitizeManageVehicleDraftKeyPart(
+    vehicleId || manageVehicleDraftVehicleId
+  );
+  if(!userId || !target){ return; }
+  clearManageVehicleEditDraftRecord(
+    MANAGE_VEHICLE_EDIT_DRAFT_WORKFLOW,
+    `u_${userId}_v_${target}`
+  );
+}
+
+
+/* ---------- restore ---------- */
+
+function manageVehicleDraftSelectHasOption(select, value){
+  if(!select || !select.options){ return false; }
+  for(const option of select.options){
+    if(option.value === value){ return true; }
+  }
+  return false;
+}
+
+/* Applies one field value. Selects only accept a value whose
+option actually exists, so a restored value can never silently
+blank a select whose option list does not contain it. */
+function setManageVehicleDraftValue(id, value){
+  if(typeof value !== "string"){ return; }
+  const el = document.getElementById(id);
+  if(!el){ return; }
+  if(el.options){
+    if(manageVehicleDraftSelectHasOption(el, value)){
+      el.value = value;
+    }
+    return;
+  }
+  if(typeof el.value === "undefined"){ return; }
+  el.value = value;
+}
+
+/* Re-runs the page's OWN change-driven behaviour (commercial /
+motorcycle wrapper visibility, EV wrapper visibility) for a
+restored value. */
+function dispatchManageVehicleDraftChange(id){
+  const el = document.getElementById(id);
+  if(!el){ return; }
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function rebuildManageVehicleDraftModels(makeValue){
+  const modelSelect = document.getElementById("vehicle_model");
+  if(!modelSelect){ return; }
+  const models = await getModels(makeValue || "");
+  modelSelect.innerHTML =
+  `
+  <option value="">
+  Select Model
+  </option>
+  `;
+  models.forEach(model=>{
+    const modelValue =
+    typeof model === "string" ? model : model.value;
+    const option = document.createElement("option");
+    option.value = modelValue;
+    option.textContent = modelValue;
+    modelSelect.appendChild(option);
+  });
+}
+
+async function rebuildManageVehicleDraftVariants(makeValue, modelValue){
+  const variantSelect = document.getElementById("vehicle_variant");
+  if(!variantSelect){ return; }
+  const variants = await getVariants(
+    makeValue || "",
+    modelValue || ""
+  );
+  variantSelect.innerHTML =
+  `
+  <option value="">
+  Select Variant (Optional)
+  </option>
+  `;
+  variants.forEach(variant=>{
+    const value = typeof variant === "string" ? variant : variant.value;
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    variantSelect.appendChild(option);
+  });
+}
+
+/* make → model → variant, rebuilding each dependent option list
+for the restored parent (exactly what the page's own change
+listeners do). */
+async function restoreManageVehicleEditDraftMakeModelVariant(fields){
+  const makeSelect = document.getElementById("vehicle_make");
+  const modelSelect = document.getElementById("vehicle_model");
+  const variantSelect = document.getElementById("vehicle_variant");
+  if(!makeSelect || !modelSelect || !variantSelect){ return; }
+
+  const draftMake =
+  typeof fields.vehicle_make === "string" ? fields.vehicle_make : "";
+  const draftModel =
+  typeof fields.vehicle_model === "string" ? fields.vehicle_model : "";
+  const draftVariant =
+  typeof fields.vehicle_variant === "string" ? fields.vehicle_variant : "";
+
+  if(
+    draftMake &&
+    draftMake !== makeSelect.value &&
+    manageVehicleDraftSelectHasOption(makeSelect, draftMake)
+  ){
+    makeSelect.value = draftMake;
+    await rebuildManageVehicleDraftModels(makeSelect.value);
+    modelSelect.value = "";
+    variantSelect.value = "";
+  }
+
+  if(
+    draftModel &&
+    draftModel !== modelSelect.value &&
+    manageVehicleDraftSelectHasOption(modelSelect, draftModel)
+  ){
+    modelSelect.value = draftModel;
+    await rebuildManageVehicleDraftVariants(
+      makeSelect.value,
+      modelSelect.value
+    );
+    variantSelect.value = "";
+  }
+
+  if(
+    draftVariant &&
+    manageVehicleDraftSelectHasOption(variantSelect, draftVariant)
+  ){
+    variantSelect.value = draftVariant;
+  }
+}
+
+/* province → city, rebuilding the city option list for the
+restored province (the same catalogue call the existing province
+change listener uses). */
+async function restoreManageVehicleEditDraftProvinceCity(fields){
+  const provinceSelect = document.getElementById("vehicle_province");
+  const citySelect = document.getElementById("vehicle_city");
+  if(!provinceSelect || !citySelect){ return; }
+
+  const draftProvince =
+  typeof fields.vehicle_province === "string"
+    ? fields.vehicle_province
+    : "";
+  const draftCity =
+  typeof fields.vehicle_city === "string" ? fields.vehicle_city : "";
+
+  if(
+    draftProvince &&
+    draftProvince !== provinceSelect.value &&
+    manageVehicleDraftSelectHasOption(provinceSelect, draftProvince)
+  ){
+    provinceSelect.value = draftProvince;
+    const cities = await getCities(provinceSelect.value);
+    citySelect.innerHTML =
+    `
+    <option value="">
+    Select City
+    </option>
+    `;
+    cities.forEach(city=>{
+      const cityValue = typeof city === "string" ? city : city.value;
+      const option = document.createElement("option");
+      option.value = cityValue;
+      option.textContent = cityValue;
+      citySelect.appendChild(option);
+    });
+    citySelect.value = "";
+  }
+
+  if(
+    draftCity &&
+    manageVehicleDraftSelectHasOption(citySelect, draftCity)
+  ){
+    citySelect.value = draftCity;
+  }
+}
+
+function applyManageVehicleEditDraftFeatures(features){
+  const container =
+  document.getElementById("vehicle_features_container");
+  if(!container || !Array.isArray(features)){ return; }
+  const wanted = new Set(
+    features.map(feature=>String(feature).trim())
+  );
+  Array.from(
+    container.querySelectorAll("input[type='checkbox']")
+  ).forEach(checkbox=>{
+    const next = wanted.has(String(checkbox.value).trim());
+    if(checkbox.checked === next){ return; }
+    checkbox.checked = next;
+    /* Reuses the picker's own change listener for chip styling. */
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  syncMvSelected();
+}
+
+
+/* Applies the temporary edit draft to the FULLY INITIALIZED
+workspace (called after every option list exists), so cascading
+selects restore in dependency order. */
+async function restoreManageVehicleEditDraft(){
+  if(manageVehicleDraftRestoring){ return; }
+  const vehicleId = manageVehicleDraftVehicleId;
+  if(!vehicleId){ return; }
+
+  const userId = await resolveManageVehicleDraftUserId();
+  if(!userId){ return; }
+
+  /* The route may have moved on while resolving the user, or the
+  workspace may have been replaced by another vehicle. */
+  if(vehicleId !== manageVehicleDraftVehicleId){ return; }
+  if(!manageVehicleDraftDomIsLive(vehicleId)){ return; }
+
+  const parts = manageVehicleDraftKeyParts(vehicleId);
+  if(!parts){ return; }
+
+  const draft = loadManageVehicleEditDraftRecord(
+    parts.workflow,
+    parts.userKey
+  );
+  if(!isSafeManageVehicleEditDraft(draft)){ return; }
+
+  /* Suppress debounced writes while draft values are applied. */
+  manageVehicleDraftRestoring = true;
+
+  try{
+
+    const fields = draft.fields || {};
+
+    /* 1. Plain fields (text / number / textarea / static select). */
+    for(const id of MANAGE_VEHICLE_EDIT_DRAFT_PLAIN_IDS){
+      setManageVehicleDraftValue(id, fields[id]);
+    }
+
+    /* 2. Vehicle category first: its change handler sets the
+    commercial / motorcycle wrapper visibility AND clears the
+    dependent commercial values for non-commercial categories. */
+    setManageVehicleDraftValue(
+      "vehicle_category",
+      fields.vehicle_category
+    );
+    dispatchManageVehicleDraftChange("vehicle_category");
+
+    /* 3. Commercial / motorcycle cascade (option lists already
+    built by initialiseManageVehicleSelectors). */
+    setManageVehicleDraftValue(
+      "vehicle_commercial_category",
+      fields.vehicle_commercial_category
+    );
+    setManageVehicleDraftValue(
+      "vehicle_cab_configuration",
+      fields.vehicle_cab_configuration
+    );
+    setManageVehicleDraftValue(
+      "vehicle_payload_capacity",
+      fields.vehicle_payload_capacity
+    );
+    setManageVehicleDraftValue(
+      "vehicle_towing_capacity",
+      fields.vehicle_towing_capacity
+    );
+    setManageVehicleDraftValue(
+      "vehicle_motorcycle_type",
+      fields.vehicle_motorcycle_type
+    );
+
+    /* 4. Fuel type drives the EV wrapper visibility. */
+    setManageVehicleDraftValue(
+      "spec_fuel_type",
+      fields.spec_fuel_type
+    );
+    dispatchManageVehicleDraftChange("spec_fuel_type");
+
+    setManageVehicleDraftValue(
+      "ev_battery_capacity",
+      fields.ev_battery_capacity
+    );
+    setManageVehicleDraftValue("ev_range", fields.ev_range);
+    setManageVehicleDraftValue(
+      "ev_charging_time",
+      fields.ev_charging_time
+    );
+
+    /* 5. Catalogue cascades. */
+    await restoreManageVehicleEditDraftMakeModelVariant(fields);
+    await restoreManageVehicleEditDraftProvinceCity(fields);
+
+    /* 6. Feature checkboxes. */
+    applyManageVehicleEditDraftFeatures(draft.features);
+
+  }catch(e){
+
+    console.warn("Manage Vehicle draft restore failed", e);
+
+  }finally{
+
+    manageVehicleDraftRestoring = false;
+
+  }
+
+}
+
+
+/* ---------- listeners (registered ONCE per module lifetime) ---------- */
+
+/* Delegated capture-phase binding: the workspace re-renders its
+whole form after several existing actions (save, note, image
+operations), so per-element listeners would be lost. Matching is
+deliberately narrow: allowlisted form controls only. */
+function manageVehicleDraftEventTargetsField(target){
+  if(!(target instanceof Element)){ return false; }
+  const id = typeof target.id === "string" ? target.id : "";
+  if(id && MANAGE_VEHICLE_EDIT_DRAFT_FIELD_ID_SET.has(id)){
+    return true;
+  }
+  return target.matches(
+    "#vehicle_features_container input[type='checkbox']"
+  );
+}
+
+function handleManageVehicleDraftFieldEvent(e){
+  if(manageVehicleDraftRestoring){ return; }
+  if(!manageVehicleDraftVehicleId){ return; }
+  if(!manageVehicleDraftEventTargetsField(e.target)){ return; }
+  scheduleManageVehicleEditDraftSave();
+}
+
+document.addEventListener(
+  "input",
+  handleManageVehicleDraftFieldEvent,
+  true
+);
+
+document.addEventListener(
+  "change",
+  handleManageVehicleDraftFieldEvent,
+  true
+);
+
+/* Refresh / tab close. */
+window.addEventListener(
+  "pagehide",
+  ()=>{
+    flushManageVehicleEditDraftNow();
+  }
+);
+
+/* SPA navigation does NOT fire pagehide, so a click on any in-app
+navigation control flushes the pending write in the capture phase,
+BEFORE the router unmounts the workspace form. */
+document.addEventListener(
+  "click",
+  (e)=>{
+
+    if(!manageVehicleDraftSaveTimer){ return; }
+
+    const target = e.target;
+
+    if(!(target instanceof Element)){ return; }
+
+    const navEl =
+    target.closest(
+      "a[href], a[data-link], [data-link], " +
+      "[onclick*='navigate('], " +
+      "[onclick*='loadView('], " +
+      "[onclick*='goDashboardView('], " +
+      "[onclick*='previewVehicle(']"
+    );
+
+    if(navEl){
+      flushManageVehicleEditDraftNow();
+    }
+
+  },
+  true
+);
+
+
+/* ---------- loading state (same principle as Upload Vehicle) ---------- */
+
+/* The workspace is initialized asynchronously (vehicle row +
+catalogue option lists + draft restore). This overlay reuses the
+EXISTING publish-overlay markup/classes already used by the publish
+flow and Upload Vehicle, so the unfinished form is never shown
+uninitialized and no page design is changed. */
+function mountManageVehicleLoadingOverlay(){
+
+  manageVehicleBootSeq++;
+
+  if(!document.getElementById("manageVehicleLoading")){
+
+    const overlay = document.createElement("div");
+    overlay.id = "manageVehicleLoading";
+    overlay.className = "hufa-publish-overlay hufa-publish-visible";
+    overlay.setAttribute("role","status");
+    overlay.setAttribute("aria-live","polite");
+    overlay.innerHTML = `
+      <div class="hufa-publish-backdrop"></div>
+      <div class="hufa-publish-center">
+        <div class="hufa-publish-card bg-white">
+          <div class="hufa-publish-spinner"></div>
+          <p class="hufa-publish-brand">HUFA</p>
+          <p class="hufa-publish-title">Loading Manage Vehicle</p>
+          <p class="hufa-publish-subtitle">Restoring your vehicle workspace...</p>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+  }
+
+  document.documentElement.style.overflow = "hidden";
+  window.scrollTo(0, 0);
+
+  return manageVehicleBootSeq;
+
+}
+
+function unmountManageVehicleLoadingOverlay(){
+
+  document.getElementById("manageVehicleLoading")?.remove();
+
+  document.documentElement.style.overflow = "";
+
+}
+
+
 export async function ManageVehiclePage(){
 
 const params =
@@ -90,8 +843,57 @@ Missing vehicle id.
 
 }
 
+/* PHASE 5 — show the loading state FIRST, before any page work,
+and register this workspace as the active draft context. */
+const manageVehicleBoot = mountManageVehicleLoadingOverlay();
+
+manageVehicleDraftVehicleId = vehicleId;
+
+/* Any pending write from the previous workspace belongs to that
+vehicle and has already been flushed on the navigation click;
+never carry it into this one. */
+manageVehicleDraftPendingVehicleId = "";
+if(manageVehicleDraftSaveTimer){
+  clearTimeout(manageVehicleDraftSaveTimer);
+  manageVehicleDraftSaveTimer = null;
+}
+
+/* Eager draft-user-ID resolution (fire-and-forget) so the
+pagehide / SPA-nav flush functions always find the user id
+already cached and can write synchronously before unload.
+The cache is invalidated first so a sign-out/sign-in without a
+full reload can never write a draft under the previous user. */
+manageVehicleDraftUserIdCache = "";
+
+resolveManageVehicleDraftUserId();
+
 setTimeout(
-() => loadVehicleWorkspace(vehicleId),
+() => {
+
+/* A NEWER mount supersedes this one: skip stale init so the
+full load (which ends with the draft restore) runs only for
+the LATEST mount. */
+if(manageVehicleBoot !== manageVehicleBootSeq){ return; }
+
+loadVehicleWorkspace(vehicleId)
+.catch((loadError)=>{
+console.warn("Manage Vehicle init failed", loadError);
+})
+.finally(()=>{
+/* Only the CURRENT boot may take the overlay down — a stale
+init finishing late must never reveal the newer mount's
+uninitialized form. When the workspace DOM is already gone
+(route changed while loading) the overlay must never stay
+stuck, so it is removed as well. */
+if(
+manageVehicleBoot === manageVehicleBootSeq ||
+!document.getElementById("manageVehicleRoot")
+){
+unmountManageVehicleLoadingOverlay();
+}
+});
+
+},
 0
 );
 
@@ -137,6 +939,15 @@ if(!user){
 navigate("/login");
 return;
 
+}
+
+/* PHASE 5 — cache the authenticated user id for the draft key
+(user + vehicle scoping) as early as possible. */
+const userId =
+typeof user.id === "string" ? user.id : "";
+
+if(userId){
+manageVehicleDraftUserIdCache = userId;
 }
 
 const {
@@ -199,6 +1010,14 @@ await renderFinanceApplications(vehicle);
 await renderVehicleNotes(vehicle);
 
 renderBottomActionBar(vehicle);
+
+/* PHASE 5 — the workspace is now fully rendered (details, location,
+classification, history, description, specifications, feature
+checkboxes, notes) and every cascade option list exists, so the
+temporary edit draft can be re-applied over the published values.
+Nothing is written to Supabase here: the published row is only
+changed by the existing Save Changes action. */
+await restoreManageVehicleEditDraft();
 
 }
 
@@ -3120,6 +3939,15 @@ py-3 px-4
 
 </div>
 
+${[
+  ["engine_size_l", "Engine Size (L)"], ["torque_nm", "Torque (Nm)"],
+  ["cylinders", "Cylinders"], ["fuel_consumption_l100", "Fuel Consumption (L/100 km)"],
+  ["co2_emissions_gkm", "CO₂ Emissions (g/km)"], ["electric_range_km", "Electric Range (km)"]
+].filter(([key]) => vehicle[key] !== null && vehicle[key] !== undefined && vehicle[key] !== "" && Number.isFinite(Number(vehicle[key])) && Number(vehicle[key]) >= 0).map(([key, label]) => `<div><label class="block mb-1 text-sm font-semibold" for="spec_${key}">${label}</label><input id="spec_${key}" type="number" min="0" step="any" value="${vehicle[key]}" class="w-full rounded-xl border border-[#E2E8F0] py-3 px-4" /></div>`).join("")}
+
+${vehicle.turbocharged === true ? '<label class="flex items-center gap-2 text-sm font-semibold"><input id="spec_turbocharged" type="checkbox" checked /> Turbocharged</label>' : ""}
+${vehicle.fast_charge === true ? '<label class="flex items-center gap-2 text-sm font-semibold"><input id="spec_fast_charge" type="checkbox" checked /> Fast Charging</label>' : ""}
+
 <div>
 
 <label class="block mb-1 text-sm font-semibold">
@@ -4253,6 +5081,11 @@ ${app.email || "-"}
 </div>
 
 <div>
+<strong>Contact:</strong>
+${app.phone || "-"}
+</div>
+
+<div>
 <strong>Credit Score:</strong>
 ${app.credit_score || "-"}
 </div>
@@ -5092,9 +5925,41 @@ class="
 mt-10
 mb-10
 flex
+flex-wrap
+items-center
 justify-end
+gap-3
 "
 >
+
+<!-- PHASE 5 — explicit discard for the temporary edit draft.
+Existing bottom action bar only: discards the unsaved edit draft
+for THIS user + vehicle and reloads the workspace from the
+published row. Published vehicle data is never touched. -->
+<button
+type="button"
+onclick="discardVehicleDraftChanges()"
+class="
+px-6
+py-3
+rounded-xl
+border
+border-slate-200
+bg-white
+text-slate-600
+font-bold
+transition-all
+duration-300
+hover:bg-red-50
+hover:text-red-600
+hover:border-red-200
+active:scale-[0.98]
+"
+>
+
+Discard Unsaved Changes
+
+</button>
 
 <button
 onclick="saveVehicleChanges()"
@@ -5123,6 +5988,55 @@ Save Changes
 );
 
 }
+
+/* PHASE 5 — discard the temporary edit draft (explicit user
+cancel/discard). Clears ONLY the draft for this user + vehicle and
+re-renders the workspace from the published row, so the user is
+returned to the normal saved vehicle state. */
+window.discardVehicleDraftChanges =
+async function(){
+
+const params =
+new URLSearchParams(
+window.location.search
+);
+
+const vehicleId =
+params.get("id");
+
+if(!vehicleId){ return; }
+
+const confirmed =
+confirm(
+"Discard unsaved changes and restore the saved vehicle details?"
+);
+
+if(!confirmed){ return; }
+
+await resolveManageVehicleDraftUserId();
+
+clearManageVehicleEditDraft(vehicleId);
+
+const boot =
+mountManageVehicleLoadingOverlay();
+
+try{
+
+await loadVehicleWorkspace(vehicleId);
+
+}catch(e){
+
+console.warn("Manage Vehicle reload failed", e);
+
+}finally{
+
+if(boot === manageVehicleBootSeq){
+unmountManageVehicleLoadingOverlay();
+}
+
+}
+
+};
 
 function overviewChip(
 label,
@@ -5170,6 +6084,13 @@ navigate(
 );
 
 };
+
+function manageVehicleOptionalNumber(id){
+const raw = document.getElementById(id)?.value;
+if(raw === undefined || raw === "") return null;
+const value = Number(raw);
+return Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 window.saveVehicleChanges =
 async function(){
@@ -5468,6 +6389,15 @@ document.getElementById(
 )?.value
 ) || null,
 
+engine_size_l: manageVehicleOptionalNumber("spec_engine_size_l"),
+torque_nm: manageVehicleOptionalNumber("spec_torque_nm"),
+cylinders: manageVehicleOptionalNumber("spec_cylinders"),
+turbocharged: document.getElementById("spec_turbocharged")?.checked === true,
+fuel_consumption_l100: manageVehicleOptionalNumber("spec_fuel_consumption_l100"),
+co2_emissions_gkm: manageVehicleOptionalNumber("spec_co2_emissions_gkm"),
+electric_range_km: manageVehicleOptionalNumber("spec_electric_range_km"),
+fast_charge: document.getElementById("spec_fast_charge")?.checked === true,
+
 vin:
 document.getElementById(
 "spec_vin"
@@ -5630,6 +6560,12 @@ alert(error.message);
 return;
 
 }
+
+/* PHASE 5 — the user's edits are now saved to the published
+vehicle row, so the temporary edit draft for THIS user + vehicle
+is no longer needed. Cleared immediately (and only) on success;
+a failed update above keeps the draft intact. */
+clearManageVehicleEditDraft(vehicleId);
 
 const {
 data:updatedVehicle,

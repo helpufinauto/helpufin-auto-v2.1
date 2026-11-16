@@ -1,8 +1,14 @@
 import { supabase } from "../js/api.js";
 import { navigate } from "../js/router.js";
-import { toast } from "../js/ui.js";
+import { toast, showGuestLimitModal } from "../js/ui.js";
 import { renderVehicleCard } from "../components/vehicleCard.js";
+import { getCardDetailLevel } from "../js/cardDetailPreference.js";
 import { toggleCompare } from "../js/ui.js";
+import {
+  getGuestSaved,
+  addGuestSaved,
+  removeGuestSaved
+} from "../js/guestStore.js";
 
 /* ============================================================
    SELLER / DEALER SHOWCASE PAGE
@@ -124,7 +130,8 @@ async function init() {
   seller = profile || { name: "Seller", account_type: "private" };
 
   /* Load the current user's saved set (non-blocking) so card hearts reflect
-     the real saved state just like Browse. Logged out → empty set. */
+     the real saved state just like Browse. Guests → their own browser-side
+     saved ids (max 2). Logged out is never redirected here. */
   const { data: userData } = await supabase.auth.getUser();
   if (userData?.user) {
     const { data: saved } = await supabase
@@ -133,6 +140,10 @@ async function init() {
       .eq("user_id", userData.user.id);
     (saved || []).forEach((row) => {
       if (row?.vehicle_id) savedSet.add(row.vehicle_id);
+    });
+  } else {
+    getGuestSaved().forEach((id) => {
+      if (id) savedSet.add(id);
     });
   }
 
@@ -466,7 +477,7 @@ function renderGrid() {
 
   empty.classList.add("hidden");
   grid.innerHTML = visible
-    .map((v) => renderVehicleCard(v, { layout: "grid", actions: "browse", saved: savedSet.has(v.id) }))
+    .map((v) => renderVehicleCard(v, { layout: "grid", actions: "browse", saved: savedSet.has(v.id), detailLevel: getCardDetailLevel() }))
     .join("");
 }
 
@@ -506,9 +517,27 @@ window.clearSellerSearch = function () {
 window.toggleSave = async function (id) {
   if (!id) return;
   const { data: userData } = await supabase.auth.getUser();
+
   if (!userData?.user) {
-    toast("Login to save vehicles");
-    navigate("/login");
+    /* =========================================
+       GUEST — save / unsave locally (max 2).
+       Never redirected to login.
+    ========================================= */
+    if (savedSet.has(id)) {
+      removeGuestSaved(id);
+      savedSet.delete(id);
+      toast("Removed from saved");
+    } else {
+      const result = addGuestSaved(id);
+      if (!result.ok) {
+        showGuestLimitModal("save");
+        return;
+      }
+      savedSet.add(id);
+      toast("Saved vehicle");
+    }
+
+    renderGrid();
     return;
   }
 

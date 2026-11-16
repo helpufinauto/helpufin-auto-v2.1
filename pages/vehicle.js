@@ -5,6 +5,7 @@ const PLACEHOLDER = asset("/placeholder.png");
 import {
 supabase,
 createVehicleInterest,
+createFinanceApplication,
 getUserProfile
 } from "../js/api.js";
 import { navigate } from "../js/router.js";
@@ -15,11 +16,18 @@ closeModal,
 toast,
 compareButton,
 toggleCompare,
-getCompare
+getCompare,
+showGuestLimitModal
 } from "../js/ui.js";
+import {
+isGuestSaved,
+addGuestSaved,
+removeGuestSaved
+} from "../js/guestStore.js";
 import { calculateMonthly } from "../js/financeEngine.js";
 import { getFeatures } from "../js/catalog.js";
-import { renderVehicleCardSkeletons } from "../components/vehicleCard.js";
+import { renderVehicleCardSkeletons, renderVehicleCardDetails } from "../components/vehicleCard.js";
+import { getCardDetailLevel } from "../js/cardDetailPreference.js";
 import {
 rankVehicles,
 getPopularityMap
@@ -341,6 +349,11 @@ trackView(id);
 /* ðŸ”¥ RENDER MAIN */
 /* ========================== */
 renderVehicle(data);
+
+/* GUEST SAVE STATE — keep the detail-page save button in sync
+   with the visitor's local saves (authenticated behaviour is
+   unchanged and left untouched). */
+syncVehicleSaveButton(data.id);
 
 /* =========================================
 INTERESTED BUTTON â€” reflect the real stored
@@ -938,7 +951,7 @@ ${v.commercial_vehicle ? `<span class="chip">Commercial Vehicle</span>` : ""}
   </div>
 
   <!-- RIGHT SIDE -->
-  <div class="text-left md:text-right space-y-3">
+  <div class="vehicle-detail-price-actions text-left md:text-right space-y-3">
 
     <!-- PRICE -->
 <div class="space-y-2">
@@ -1031,15 +1044,17 @@ R ${Number(v.price || 0).toLocaleString()}
 </div>
 
 <!-- ACTION BUTTONS -->
-<div class="flex flex-wrap md:justify-end gap-2 items-center">
+<div class="vehicle-detail-action-group">
 
 <!-- Save â€” styled like the Browse card action buttons -->
 <button
+id="vehicleSaveBtn"
+data-vehicle-id="${v.id}"
 onclick="saveVehicle('${v.id}')"
-class="w-8 h-8 rounded-full border flex items-center justify-center transition-all border-slate-200 bg-white hover:border-[#3B82F6]"
+class="vehicle-detail-icon-action rounded-full border flex items-center justify-center transition-all border-slate-200 bg-white hover:border-[#3B82F6]"
 title="Save Vehicle"
 >
-<svg class="w-6 h-6 text-slate-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+<svg class="vehicle-detail-action-icon text-slate-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 <path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-4-7 4V5z"/>
 </svg>
 </button>
@@ -1047,11 +1062,11 @@ title="Save Vehicle"
 <!-- Compare â€” styled like the Browse card action buttons -->
 <label
 onclick="event.stopPropagation()"
-class="w-8 h-8 rounded-full border flex items-center justify-center cursor-pointer transition-all ${getCompare().includes(v.id) ? 'border-[#3B82F6] bg-[#3B82F6]/10' : 'border-slate-200 bg-white hover:border-[#3B82F6]'}"
+class="vehicle-detail-icon-action rounded-full border flex items-center justify-center cursor-pointer transition-all ${getCompare().includes(v.id) ? 'border-[#3B82F6] bg-[#3B82F6]/10' : 'border-slate-200 bg-white hover:border-[#3B82F6]'}"
 title="Compare Vehicle"
 >
 <input type="checkbox" data-compare="${v.id}" ${getCompare().includes(v.id) ? "checked" : ""} onchange="event.stopPropagation(); toggleVehicleCompare('${v.id}')" class="hidden"/>
-<svg class="w-6 h-6 ${getCompare().includes(v.id) ? 'text-[#3B82F6]' : 'text-slate-700'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+<svg class="vehicle-detail-action-icon ${getCompare().includes(v.id) ? 'text-[#3B82F6]' : 'text-slate-700'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h7"/><path stroke-linecap="round" stroke-linejoin="round" d="M4 17h7"/><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h7"/><path stroke-linecap="round" stroke-linejoin="round" d="M13 17h7"/><circle cx="10" cy="7" r="2"/><circle cx="14" cy="17" r="2"/>
 </svg>
 </label>
@@ -1062,17 +1077,18 @@ title="Compare Vehicle"
 id="interestedBtn"
 type="button"
 onclick="markInterested('${v.id}')"
-class="flex items-center justify-center gap-1.5 text-[13px] rounded-xl px-5 py-3 font-semibold transition-all border ${interestedBtnClasses(false)}"
+class="vehicle-detail-interest-action flex items-center justify-center gap-1.5 text-[13px] rounded-xl px-5 py-3 font-semibold transition-all border ${interestedBtnClasses(false)}"
 title="Interested in this vehicle"
 >
 <i data-lucide="hand-heart" class="w-3.5 h-3.5"></i>
-<span>Interested</span>
+<svg class="vehicle-interest-sent-icon hidden" data-interest-sent-icon viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+<span class="vehicle-interest-label">Interested</span>
 </button>
 
 ${v.seller_id ? `
 <button
 onclick="openEnquiry('${v.id}','${v.seller_id}')"
-class="btn btn-dark flex items-center justify-center gap-1.5 text-[13px]"
+class="btn btn-dark vehicle-detail-contact-action flex items-center justify-center gap-1.5 text-[13px]"
 >
 <i data-lucide="phone" class="w-3.5 h-3.5"></i>
 <span>Contact Seller</span>
@@ -1906,7 +1922,7 @@ async function buildVehicleFeatureGroups(v){
 
       }
 
-    }catch{
+    }catch(err){
 
       features =
         v.features
@@ -2026,7 +2042,7 @@ function parseVehicleFeatures(raw){
 
         }
 
-      }catch{
+      }catch(err){
         parsed = null;
       }
 
@@ -2928,20 +2944,496 @@ toast("Something went wrong");
 };
 
 
-window.applyVehicle = id =>
-navigate("/apply?id="+id);
+/* =========================================
+   PHASE 2 — HUFA OFFICIAL APPLICATION FORM
+   Single source of truth for the external
+   finance application destination. Used after
+   the Phase 1 tracking insert succeeds so the
+   flow is always:
+   APPLY FOR FINANCE -> TRACK WITH DEALERSHIP
+   -> REDIRECT -> application-form URL.
+   Phase 1 tracking is untouched.
+========================================= */
+
+const HUFA_FINANCE_FORM_URL =
+ "https://helpufin.co.za/application-form/";
+
+/* Phase 2 redirect: same-tab redirect only, called after Phase 1 success. */
+function openHufaFinanceForm(){
+
+  window.location.href = HUFA_FINANCE_FORM_URL;
+  return;
+
+}
+
+/* =========================================
+   PHASE 1 — APPLY FOR FINANCE (+ PHASE 2 REDIRECT)
+   One legitimate click records ONE finance
+   application against the dealership that owns
+   the vehicle (existing vehicle -> seller_id
+   relationship):
+
+   - Logged in  → recorded immediately from the
+     existing HUFA account details; nothing is
+     asked for.
+   - Guest      → minimum name / surname / email /
+     contact-number modal in the existing HUFA
+     modal language, then recorded.
+
+   The vehicle page design and the finance
+   calculator are untouched. Phase 2 appends the
+   external application-form redirect AFTER the
+   Phase 1 tracking insert succeeds.
+========================================= */
+
+let financeApplyBusy = false;
+
+window.applyVehicle = async function(id){
+
+  /* ONE APPLICATION PER LEGITIMATE CLICK —
+     double-clicks and any re-entry while a
+     submission is still in flight are ignored,
+     so the UI can never create duplicate rows. */
+  if(financeApplyBusy){
+    return;
+  }
+
+  financeApplyBusy = true;
+
+  try{
+
+    const { data:userData } =
+    await supabase.auth.getUser();
+
+    const user = userData?.user || null;
+
+    if(user){
+
+      /* AUTHENTICATED — use the details HUFA
+         already has on the account. */
+      let profile = null;
+
+      try{
+        profile = await getUserProfile();
+      }catch(e){}
+
+      const result =
+      await createFinanceApplication({
+        vehicleId: id,
+        userId: user.id,
+        name: profile?.name || "",
+        surname: profile?.surname || "",
+        email: profile?.email || user.email || "",
+        phone: profile?.phone || profile?.mobile || "",
+        accountType: profile?.account_type || null,
+        dealershipName: profile?.dealership_name || null
+      });
+
+      financeApplyDone(result);
+
+    }else{
+
+      /* GUEST — never forced to create an account
+         just to record the application/interest. */
+      openFinanceGuestModal(id);
+
+    }
+
+  }catch(err){
+
+    console.error("Apply for finance failed:", err);
+    toast("Something went wrong");
+
+  }finally{
+
+    financeApplyBusy = false;
+
+  }
+
+};
+
+/* Shared result handling for both flows.
+   PHASE 2 — on every recorded outcome (fresh or
+   already-applied) the confirmation modal carries
+   the official HUFA form CTA, so the user always
+   lands on the exact application-form URL after
+   the dealership tracking is handled. An automatic
+   same-flow attempt runs first; when a blocker
+   stops it the modal button completes the redirect
+   as an explicit user gesture. Failures never
+   redirect. */
+function financeApplyDone(result){
+
+  if(result?.error === "ALREADY_APPLIED"){
+
+    toast(
+      "You already applied for finance on this vehicle"
+    );
+
+    showFinanceAppliedModal(true);
+    openHufaFinanceForm(false);
+    return;
+
+  }
+
+  if(result?.error){
+
+    console.error(
+      "Finance application not recorded:",
+      result.error
+    );
+
+    toast("Failed to submit finance application");
+    return;
+
+  }
+
+  showFinanceAppliedModal(false);
+  openHufaFinanceForm(false);
+
+}
+
+/* =========================================
+   GUEST CONTACT MODAL — minimum details only
+   (name, surname, email, contact number) using
+   the SAME HUFA modal language as the existing
+   "Express Interest" popup. No new form design.
+========================================= */
+
+function openFinanceGuestModal(vehicleId){
+
+  showModal(`
+
+<div class="modal-box space-y-3">
+
+<h2 class="text-xl font-bold">
+Apply for Finance
+</h2>
+
+<p class="text-sm text-slate-500">
+Share a few details so the dealership can contact you about your finance application.
+</p>
+
+<div class="grid grid-cols-2 gap-2">
+<input id="finApplyName" placeholder="Name" autocomplete="given-name" class="w-full border p-2">
+<input id="finApplySurname" placeholder="Surname" autocomplete="family-name" class="w-full border p-2">
+</div>
+
+<input id="finApplyEmail" type="email" placeholder="Email" autocomplete="email" class="w-full border p-2">
+<input id="finApplyPhone" type="tel" placeholder="Contact Number" autocomplete="tel" class="w-full border p-2">
+
+<div class="flex gap-2">
+
+<button id="finApplySubmit"
+class="btn btn-gold w-full">
+Submit Application
+</button>
+
+<button id="finApplyCancel"
+class="btn btn-dark w-full">
+Cancel
+</button>
+
+</div>
+
+</div>
+
+`);
+
+  document.getElementById("finApplySubmit").onclick =
+  () => submitFinanceGuestApplication(vehicleId);
+
+  document.getElementById("finApplyCancel").onclick =
+  () => closeModal();
+
+}
+
+async function submitFinanceGuestApplication(vehicleId){
+
+  const btn =
+  document.getElementById("finApplySubmit");
+
+  /* Re-click / double-submit guard — the disabled
+     button means one submission per form fill. */
+  if(!btn || btn.disabled){
+    return;
+  }
+
+  const name =
+  document.getElementById("finApplyName")?.value.trim() || "";
+
+  const surname =
+  document.getElementById("finApplySurname")?.value.trim() || "";
+
+  const email =
+  document.getElementById("finApplyEmail")?.value.trim() || "";
+
+  const phone =
+  document.getElementById("finApplyPhone")?.value.trim() || "";
+
+  /* VERY LIGHT VALIDATION — same style as the
+     existing Express Interest popup. */
+  if(!name){
+    toast("Please enter your name");
+    return;
+  }
+
+  if(!surname){
+    toast("Please enter your surname");
+    return;
+  }
+
+  if(!email){
+    toast("Please enter your email");
+    return;
+  }
+
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    toast("Please enter a valid email address");
+    return;
+  }
+
+  if(!phone){
+    toast("Please enter your contact number");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = "Submitting...";
+
+  try{
+
+    const result =
+    await createFinanceApplication({
+      vehicleId,
+      userId: null,
+      name,
+      surname,
+      email,
+      phone,
+      accountType: "guest",
+      dealershipName: null
+    });
+
+    if(result?.error === "ALREADY_APPLIED"){
+
+      closeModal();
+      toast(
+        "You already applied for finance on this vehicle"
+      );
+      showFinanceAppliedModal(true);
+      openHufaFinanceForm(false);
+      return;
+
+    }
+
+    if(result?.error){
+
+      console.error(
+        "Finance application not recorded:",
+        result.error
+      );
+
+      toast("Failed to submit finance application");
+
+      /* Keep the modal open with the details intact. */
+      btn.disabled = false;
+      btn.innerText = "Submit Application";
+      return;
+
+    }
+
+    closeModal();
+    showFinanceAppliedModal(false);
+    openHufaFinanceForm(false);
+
+  }catch(err){
+
+    console.error("Apply for finance failed:", err);
+    toast("Something went wrong");
+
+    btn.disabled = false;
+    btn.innerText = "Submit Application";
+
+  }
+
+}
+
+/* =========================================
+   CONFIRMATION — shown once the application is
+   recorded. Mirrors the existing "Interest Sent"
+   confirmation so the design language matches.
+   PHASE 2 — adds the official HUFA form CTA as
+   the primary destination AFTER the Phase 1
+   tracking row is recorded. The vehicle page
+   stays intact; only this confirmation gains
+   the redirect button. No other design changes.
+========================================= */
+
+function showFinanceAppliedModal(already){
+
+  showModal(`
+
+<div class="modal-box text-center" style="max-width:420px;">
+
+<div style="
+width:64px;
+height:64px;
+margin:0 auto 16px;
+border-radius:9999px;
+background:rgba(228,138,47,0.14);
+border:1px solid rgba(228,138,47,0.35);
+display:flex;
+align-items:center;
+justify-content:center;
+">
+
+<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#E48A2F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+<path d="M5 13l4 4L19 7"/>
+</svg>
+
+</div>
+
+<h2 style="
+font-size:22px;
+font-weight:900;
+letter-spacing:-0.02em;
+color:#08111F;
+margin:0 0 10px;
+">
+${already ? "Already Applied" : "Application Submitted"}
+</h2>
+
+<p style="
+font-size:14px;
+line-height:1.6;
+color:#08111F;
+opacity:0.72;
+margin:0 0 20px;
+">
+${
+already
+? "You have already submitted a finance application for this vehicle. The dealership has it on record and will be in touch."
+: "Thank you. Your finance application for this vehicle has been recorded and sent to the dealership. The dealership will contact you about your application."
+}
+</p>
+
+<button id="financeAppliedForm"
+class="btn btn-gold w-full">
+Continue to Application Form
+</button>
+
+<button id="financeAppliedDone"
+class="btn btn-dark w-full"
+style="margin-top:10px;">
+Done
+</button>
+
+</div>
+
+`);
+
+  document.getElementById(
+    "financeAppliedForm"
+  ).onclick = () => openHufaFinanceForm();
+
+  document.getElementById(
+    "financeAppliedDone"
+  ).onclick = () => closeModal();
+
+}
 
 window.viewSeller = id =>
 navigate("/seller?id="+id);
+
+/* =========================================
+   DETAIL-PAGE SAVE BUTTON STATE
+   Reflects the guest's own local saves. Authenticated users keep
+   the existing (unchanged) behaviour, so this is a no-op for them.
+========================================= */
+
+async function syncVehicleSaveButton(vehicleId){
+
+try{
+
+const { data:userData } =
+await supabase.auth.getUser();
+
+if(userData?.user){
+return;
+}
+
+const btn =
+document.getElementById("vehicleSaveBtn");
+
+if(!btn){
+return;
+}
+
+const saved =
+isGuestSaved(vehicleId);
+
+btn.classList.toggle("border-[#3B82F6]", saved);
+btn.classList.toggle("bg-[#3B82F6]/10", saved);
+btn.classList.toggle("border-slate-200", !saved);
+btn.classList.toggle("bg-white", !saved);
+
+const svg =
+btn.querySelector("svg");
+
+if(svg){
+
+  svg.classList.toggle("text-[#3B82F6]", saved);
+  svg.classList.toggle("text-slate-700", !saved);
+  svg.setAttribute("fill", saved ? "currentColor" : "none");
+
+}
+
+}catch(e){
+
+/* non-blocking — button just stays unsaved */
+
+}
+
+}
 
 window.saveVehicle = async function(vehicleId){
 
   const { data:userData } = await supabase.auth.getUser();
 
   if(!userData.user){
-    toast("Login to save vehicles");
-    navigate("/login");
+
+    /* =========================================
+       GUEST — save / unsave locally (max 2).
+       Never redirected to login.
+    ========================================= */
+
+    if(isGuestSaved(vehicleId)){
+
+      removeGuestSaved(vehicleId);
+
+      toast("Removed from saved");
+
+    } else {
+
+      const result = addGuestSaved(vehicleId);
+
+      if(!result.ok){
+
+        /* Guest save limit reached — show the HUFA message. */
+        showGuestLimitModal("save");
+        return;
+
+      }
+
+      toast("Saved successfully");
+
+    }
+
+    syncVehicleSaveButton(vehicleId);
+
     return;
+
   }
 
 const { error } = await supabase
@@ -6068,18 +6560,21 @@ document.getElementById("interestedBtn");
 if(!btn) return;
 
 btn.className =
-"flex items-center justify-center gap-1.5 text-[13px] rounded-xl px-5 py-3 font-semibold transition-all border "
+"vehicle-detail-interest-action flex items-center justify-center gap-1.5 text-[13px] rounded-xl px-5 py-3 font-semibold transition-all border "
 + interestedBtnClasses(selected);
 
 const labelEl =
-btn.querySelector("span");
+btn.querySelector(".vehicle-interest-label");
+const sentIcon = btn.querySelector("[data-interest-sent-icon]");
+
+sentIcon?.classList.toggle("hidden", !selected);
 
 if(selected){
 
   btn.title = "Interest sent for this vehicle";
 
   if(labelEl){
-    labelEl.textContent = "Interest Sent âœ“";
+    labelEl.textContent = "Interest Sent";
   }
 
   /* Flag so repeated clicks are recognised as already
@@ -6700,6 +7195,9 @@ shrink-0
 w-[280px]
 sm:w-[300px]
 "
+data-expandable-vehicle-card
+data-card-detail-level="${getCardDetailLevel()}"
+data-expanded="false"
 >
 
 <div class="
@@ -6759,6 +7257,8 @@ text-[#64748B]
 ${v.year || "-"} •
 ${Number(v.mileage || 0).toLocaleString()} km
 </p>
+
+${renderVehicleCardDetails(v, getCardDetailLevel())}
 
 <div class="
 flex
@@ -7127,7 +7627,21 @@ a.behaviorScore
 scored = scored.slice(0,4);
 
 box.innerHTML =
-scored.map(v=>`
+scored.map(renderBehaviorRecommendationCard).join("");
+
+}catch(err){
+
+console.error(
+"Behavior AI failed:",
+err
+);
+
+}
+
+}
+
+function renderBehaviorRecommendationCard(v){
+return `
 
 <div
 onclick="viewRelatedVehicle('${v.id}')"
@@ -7145,6 +7659,9 @@ transition-all
 duration-500
 hover:-translate-y-1
 "
+data-expandable-vehicle-card
+data-card-detail-level="${getCardDetailLevel()}"
+data-expanded="false"
 >
 
 <div class="
@@ -7205,6 +7722,8 @@ ${v.year || "-"} •
 ${Number(v.mileage || 0).toLocaleString()} km
 </p>
 
+${renderVehicleCardDetails(v, getCardDetailLevel())}
+
 <div class="
 flex
 items-center
@@ -7234,17 +7753,7 @@ View →
 
 </div>
 
-`).join("");
-
-}catch(err){
-
-console.error(
-"Behavior AI failed:",
-err
-);
-
-}
-
+`;
 }
 
 /* =========================================

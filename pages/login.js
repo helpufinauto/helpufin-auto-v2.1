@@ -188,6 +188,8 @@ mb-1.5
 Password
 </label>
 
+<div class="login-password-field">
+
 <input
 id="password"
 type="password"
@@ -199,6 +201,28 @@ input-light
 "
 required
 >
+
+<!-- PHASE 2 - login password visibility (eye) button.
+     type="button" so it can never submit the form.
+     Inline SVG only (same icon approach as /signup) - no icon library. -->
+<button
+type="button"
+id="loginPasswordToggle"
+class="login-password-toggle"
+aria-label="Show password"
+aria-pressed="false"
+aria-controls="password"
+title="Show password"
+>
+<span class="login-password-icon-show">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+</span>
+<span class="login-password-icon-hide">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+</span>
+</button>
+
+</div>
 
 </div>
 
@@ -294,6 +318,38 @@ Create Account
 
 }
 
+/* PHASE 2 - LOGIN PASSWORD VISIBILITY TOGGLE.
+   Mirrors the /signup eye button (same inline-SVG approach, no
+   icon library). Wires the eye button to its own password input.
+   Starts as type="password" (hidden) and the button flips ONLY
+   that input between password/text. Value is never read, logged
+   or stored - only input.type changes. The button is a real
+   <button type="button">, so it can never submit the form. */
+
+function bindLoginPasswordToggle(inputId, toggleId){
+  const input = document.getElementById(inputId);
+  const toggle = document.getElementById(toggleId);
+  if(!input || !toggle){
+    return;
+  }
+  if(toggle.dataset.passwordToggleBound){
+    return;
+  }
+  toggle.dataset.passwordToggleBound = "true";
+  function applyVisibility(visible){
+    /* The ONLY thing that ever changes the field type. */
+    input.type = visible ? "text" : "password";
+    toggle.setAttribute("aria-pressed", visible ? "true" : "false");
+    toggle.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+    toggle.setAttribute("title", visible ? "Hide password" : "Show password");
+  }
+  /* Default state: password hidden. Never auto-revealed. */
+  applyVisibility(false);
+  toggle.addEventListener("click", ()=>{
+    applyVisibility(input.type === "password");
+  });
+}
+
 function initLogin(){
 
   const form =
@@ -306,6 +362,10 @@ return;
 }
 
 form.dataset.bound = "true";
+
+/* PHASE 2 - login password visibility (eye) button.
+   Starts hidden; toggles its own field independently. */
+bindLoginPasswordToggle("password", "loginPasswordToggle");
 
 /* Duplicate-action guard. Only ONE login
    request can ever be in flight. The shared
@@ -383,6 +443,19 @@ if(profile?.role === "admin"){
   hideAuthLoading();
 
 }else{
+
+  /* PHASE 1 — LOGIN ALWAYS LANDS ON DASHBOARD / OVERVIEW.
+     DashboardPage() boots into the view persisted in
+     sessionStorage under "dashboardView" by the PREVIOUS
+     session (e.g. Trade-In Centre, Inventory). Clearing that
+     key HERE — once, at the moment of a successful login —
+     guarantees the landing view is always Overview, no matter
+     where the account was before. In-dashboard navigation
+     keeps persisting views exactly as before, so Trade-In
+     Centre and every other view remain reachable normally. */
+  try{
+    sessionStorage.removeItem("dashboardView");
+  }catch(err){}
 
   await navigate("/dashboard");
 

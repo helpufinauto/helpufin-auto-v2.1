@@ -217,7 +217,11 @@ return;
 
 }
 
-/* DUPLICATE */
+/* DUPLICATE — a FULL application (with the affordability
+   snapshot) blocks a second one. A lightweight Phase 1
+   vehicle-page row (affordability fields still NULL) does
+   NOT block: the form below UPGRADES it via saveApp()
+   instead of creating a second row. */
 
 const { data:existing } =
 await supabase
@@ -227,7 +231,10 @@ await supabase
 .eq("user_id", user.id);
 
 
-if(existing.length){
+if(
+existing?.length &&
+existing.some(a => a.affordability_category != null)
+){
 
 document.getElementById("applyBox").innerHTML =
 
@@ -404,9 +411,18 @@ const btn = document.getElementById("saveBtn");
 btn.disabled = true;
 btn.innerText = "Saving...";
 
-await supabase
-.from("finance_applications")
-.insert({
+/* PHASE 1 RUNTIME CONTRACT — UPGRADE, never a second
+   row: the vehicle page "Apply for Finance" click may
+   already have recorded a lightweight application/
+   interest row for this (buyer, vehicle). The full
+   application therefore UPGRADES that row (UPDATE) with
+   the affordability snapshot + subscription details.
+   Only when no row exists yet is one INSERTED. Either
+   way the buyer keeps exactly ONE row per vehicle, the
+   dealership link stays the vehicle's own seller_id, and
+   the existing form UI below is untouched. */
+
+const appPayload = {
 
 user_id:user.id,
 seller_id:vehicle.seller_id,
@@ -445,7 +461,54 @@ affordability.preferred_term,
 affordability_category:
 affordability.affordability_category
 
-});
+};
+
+const { data:phase1Row } =
+await supabase
+.from("finance_applications")
+.select("id")
+.eq("vehicle_id", vehicle.id)
+.eq("user_id", user.id)
+.limit(1);
+
+const phase1Id =
+phase1Row?.[0]?.id || null;
+
+let saveError = null;
+
+if(phase1Id){
+
+const { error } =
+await supabase
+.from("finance_applications")
+.update(appPayload)
+.eq("id", phase1Id);
+
+saveError = error;
+
+}else{
+
+const { error } =
+await supabase
+.from("finance_applications")
+.insert(appPayload);
+
+saveError = error;
+
+}
+
+if(saveError){
+
+btn.disabled = false;
+btn.innerText = "Save Application";
+
+toast(
+"Could not save application — please try again"
+);
+
+return;
+
+}
 
 
 /* 🔔 NEW: NOTIFICATION (ADDED SAFELY) */

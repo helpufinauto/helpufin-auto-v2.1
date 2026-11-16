@@ -4,6 +4,7 @@ const PLACEHOLDER = asset("/placeholder.png");
 
 import { getCompare, toggleCompare } from "../js/ui.js";
 import { calculateMonthly } from "../js/financeEngine.js";
+import { CARD_DETAIL_CHANGE_EVENT } from "../js/cardDetailPreference.js";
 
 /* =========================================
 SHARED VEHICLE CARD — SINGLE SOURCE OF TRUTH
@@ -254,6 +255,172 @@ function specGrid(v) {
 `;
 }
 
+function detailText(value){
+  if(value === null || value === undefined) return "";
+  if(typeof value !== "string" && typeof value !== "number") return "";
+  const text = String(value).trim();
+  if(!text || /^(unknown|n\/?a|not applicable|-)$/i.test(text)) return "";
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function detailNumber(value, unit = "", allowZero = false){
+  if(value === null || value === undefined || value === "" || typeof value === "boolean") return "";
+  if(typeof value === "string" && !value.trim()) return "";
+  const n = Number(value);
+  if(!Number.isFinite(n) || n < 0 || (n === 0 && !allowZero)) return "";
+  return `${detailText(n.toLocaleString())}${unit ? ` ${unit}` : ""}`;
+}
+
+function detailFeatures(value){
+  if(Array.isArray(value)) return value.filter((item)=>typeof item === "string" || typeof item === "number");
+  if(typeof value !== "string" || !value.trim()) return [];
+  try{
+    const parsed = JSON.parse(value);
+    if(Array.isArray(parsed)) return parsed.filter((item)=>typeof item === "string" || typeof item === "number");
+    if(parsed && typeof parsed === "object") return [];
+  }catch(e){}
+  return value.split(/[,;\n]/);
+}
+
+export function renderVehicleDetails(v, { complete = false } = {}){
+  const category = String(v.vehicle_category || "").toLowerCase();
+  const fuel = String(v.fuel_type || "").toLowerCase();
+  const motorcycle = /motorcycle|motorbike|quad bike|\batv\b|side.by.side/.test(category);
+  const commercial = v.commercial_vehicle === true || /commercial/.test(category);
+  const fuelHybrid = fuel.includes("hybrid");
+  const fuelElectric = fuel.includes("electric") && !fuelHybrid;
+  const hybrid = fuelHybrid || (!fuelElectric && (v.is_hybrid === true || v.is_plugin_hybrid === true));
+  const electric = fuelElectric || (!hybrid && v.is_electric === true);
+  const isCombustion = hybrid || /petrol|gasoline|diesel/.test(fuel);
+  const groups = [];
+
+  const row = (label, value) => {
+    const safe = detailText(value);
+    return safe ? `<div class="flex min-w-0 items-start justify-between gap-2 border-b border-slate-100 py-1 last:border-0"><span class="shrink-0 text-slate-500">${label}</span><span class="min-w-0 break-words text-right font-medium text-slate-800">${safe}</span></div>` : "";
+  };
+  const numberRow = (label, value, unit, allowZero = false) => row(label, detailNumber(value, unit, allowZero));
+  const group = (title, rows) => {
+    const content = rows.filter(Boolean).join("");
+    return content ? `<section class="mt-2 min-w-0 rounded-lg border border-slate-100 bg-white p-2 text-[11px] leading-snug"><h4 class="mb-1 font-bold text-slate-700">${title}</h4>${content}</section>` : "";
+  };
+
+  groups.push(group("General specifications", [
+    complete ? row("Vehicle category", v.vehicle_category) : "",
+    row("Variant", v.variant),
+    row("Condition", v.condition),
+    row("Colour", v.color),
+    row("Body type", v.body_type),
+    row("Fuel type", v.fuel_type),
+    row("Transmission", v.transmission),
+    row("Drive type", v.drive_type),
+    !motorcycle ? numberRow("Seats", v.seats) : "",
+    !motorcycle ? numberRow("Doors", v.doors) : "",
+    motorcycle ? row("Motorcycle type", v.motorcycle_type) : ""
+  ]));
+
+  const performanceRows = [
+    numberRow("Power", v.power_kw, "kW"),
+    numberRow("Torque", v.torque_nm, "Nm")
+  ];
+  if(isCombustion){
+    performanceRows.unshift(
+      numberRow("Engine capacity", v.engine_capacity_cc, "cc"),
+      numberRow("Engine size", v.engine_size_l, "L")
+    );
+    performanceRows.push(
+      numberRow("Cylinders", v.cylinders),
+      numberRow("Fuel consumption", v.fuel_consumption_l100, "L/100 km"),
+      numberRow("CO₂ emissions", v.co2_emissions_gkm, "g/km")
+    );
+  }
+  groups.push(group(electric && !hybrid ? "Performance" : "Engine and performance", performanceRows));
+
+  if(electric || hybrid){
+    groups.push(group("Electric vehicle specifications", [
+      numberRow("Battery capacity", v.battery_capacity_kwh, "kWh"),
+      numberRow("Battery range", v.battery_range_km, "km"),
+      complete ? numberRow("Electric range", v.electric_range_km, "km") : "",
+      numberRow("Charging time", v.charging_time_hours, "hours"),
+      complete && (v.fast_charging === true || v.fast_charge === true) ? row("Fast charging", "Supported") : "",
+      electric && !hybrid ? numberRow("CO₂ emissions", v.co2_emissions_gkm, "g/km", true) : ""
+    ]));
+  }
+
+  if(commercial){
+    groups.push(group("Commercial specifications", [
+      row("Commercial category", v.commercial_category),
+      row("Cab configuration", v.cab_configuration),
+      numberRow("Payload capacity", v.payload_capacity_kg, "kg", true),
+      numberRow("Towing capacity", v.towing_capacity_kg, "kg", true)
+    ]));
+  }
+
+  const features = detailFeatures(v.features)
+    .map(detailText)
+    .filter(Boolean);
+  if(features.length){
+    groups.push(group("Features", [`<ul class="flex min-w-0 flex-wrap gap-1.5">${features.map((feature)=>`<li class="max-w-full break-words rounded-full bg-slate-50 px-2 py-1 text-slate-700">${feature}</li>`).join("")}</ul>`]));
+  }
+
+  const output = groups.filter(Boolean).join("");
+  return output ? `<div class="vehicle-card-details mt-1 min-w-0">${output}</div>` : "";
+}
+
+export function renderVehicleCardDetails(v, detailLevel = "simple"){
+  const standard = renderVehicleDetails(v);
+  const complete = renderVehicleDetails(v, { complete: true });
+  if(!standard && !complete) return "";
+
+  return `
+    <div data-card-standard-details class="${detailLevel === "detailed" ? "" : "hidden"}">${standard}</div>
+    <div data-card-expanded-details class="hidden">${complete}</div>
+    ${complete ? `
+      <button
+        type="button"
+        data-card-details-toggle
+        aria-expanded="false"
+        onclick="window.toggleVehicleCardDetails(event,this)"
+        class="mt-2 inline-flex min-h-9 max-w-full items-center rounded-lg border border-[#3B82F6]/30 bg-white px-3 py-1.5 text-left text-xs font-semibold text-[#005BBF] transition hover:bg-[#3B82F6]/5 focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+      >View All Details</button>
+    ` : ""}
+  `;
+}
+
+function syncVehicleCardDetailView(card, detailLevel){
+  card.dataset.cardDetailLevel = detailLevel;
+  const expanded = card.dataset.expanded === "true";
+  card.querySelector("[data-card-standard-details]")?.classList.toggle(
+    "hidden",
+    expanded || detailLevel !== "detailed"
+  );
+  card.querySelector("[data-card-expanded-details]")?.classList.toggle("hidden", !expanded);
+  const button = card.querySelector("[data-card-details-toggle]");
+  if(button){
+    button.textContent = expanded ? "Show Less" : "View All Details";
+    button.setAttribute("aria-expanded", String(expanded));
+  }
+}
+
+window.toggleVehicleCardDetails = function(event, button){
+  event?.stopPropagation?.();
+  const card = button?.closest("[data-expandable-vehicle-card]");
+  if(!card) return;
+  card.dataset.expanded = card.dataset.expanded === "true" ? "false" : "true";
+  syncVehicleCardDetailView(card, card.dataset.cardDetailLevel || "simple");
+};
+
+window.addEventListener(CARD_DETAIL_CHANGE_EVENT, (event)=>{
+  const level = event.detail?.level === "detailed" ? "detailed" : "simple";
+  document.querySelectorAll("[data-expandable-vehicle-card]").forEach((card)=>{
+    syncVehicleCardDetailView(card, level);
+  });
+});
+
 /* ---------- ACTION AREAS (CONFIGURABLE) ---------- */
 
 export const vehicleActions = {
@@ -503,6 +670,7 @@ flex-col
  * @param {string}  [opts.overlayRight]    Optional HTML placed absolute top-right over image
  * @param {function} [opts.highlight]      Optional text highlighter (browse search)
  * @param {boolean} opts.compact           Force compact image height (for hero contexts)
+ * @param {string}  [opts.detailLevel]     "simple" | "detailed" (default: "simple")
  */
 export function renderVehicleCard(v, opts = {}) {
 
@@ -513,8 +681,12 @@ export function renderVehicleCard(v, opts = {}) {
     extraBadge = "",
     overlayRight = "",
     highlight = (t) => t,
-    compact = false
+    compact = false,
+    detailLevel = "simple",
+    imageFallback = PLACEHOLDER
   } = opts;
+
+  const detailHtml = renderVehicleCardDetails(v, detailLevel);
 
   const actionHtml =
     typeof actions === "function"
@@ -560,6 +732,9 @@ items-center
 gap-4
 p-3
 "
+data-expandable-vehicle-card
+data-card-detail-level="${detailLevel === "detailed" ? "detailed" : "simple"}"
+data-expanded="false"
 onclick="viewVehicle('${v.id}')">
 
   <!-- IMAGE -->
@@ -573,19 +748,19 @@ onclick="viewVehicle('${v.id}')">
   overflow-hidden
   ">
     <img
-      src="${getImage(v)}"
+      src="${v.image_url || imageFallback}"
       width="200"
       height="130"
       loading="lazy"
       decoding="async"
       alt="${v.make} ${v.model}"
-      onerror="this.src='${PLACEHOLDER}'"
+      onerror="this.onerror=null;this.src='${imageFallback}'"
       class="w-full h-full object-cover transition-transform duration-500"
     >
   </div>
 
   <!-- BODY -->
-  <div class="flex-1 min-w-0 flex flex-col py-1">
+  <div class="flex-1 min-w-0 flex flex-col items-start min-w-0 flex-1">
 
     ${extraBadge}
 
@@ -620,6 +795,8 @@ onclick="viewVehicle('${v.id}')">
       <span class="vehicle-dot"></span>
       <span>${v.body_type || "Vehicle"}</span>
     </div>
+
+    ${detailHtml}
 
     <!-- BADGE ROW (seller + status chips, wraps cleanly) -->
     <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -663,24 +840,28 @@ hover:shadow-xl
 transition-all
 duration-300
 h-full
+w-full
 flex
 flex-col
 ${v.is_sponsored ? 'sponsored-card' : ''}
 ${v.premium_dealer ? 'premium-dealer-card' : ''}
 "
+data-expandable-vehicle-card
+data-card-detail-level="${detailLevel === "detailed" ? "detailed" : "simple"}"
+data-expanded="false"
 onclick="viewVehicle('${v.id}')">
 
   <!-- IMAGE -->
-  <div class="relative overflow-hidden h-[130px] bg-slate-100">
+  <div class="relative overflow-hidden aspect-[4/3] bg-slate-100">
     <img
-      src="${getImage(v)}"
+      src="${v.image_url || imageFallback}"
       width="400"
       height="300"
       loading="lazy"
       decoding="async"
       alt="${v.make} ${v.model}"
-      onerror="this.src='${PLACEHOLDER}'"
-      class="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+      onerror="this.onerror=null;this.src='${imageFallback}'"
+      class="w-full h-full object-contain transition-transform duration-500 hover:scale-105"
     >
 
     ${overlayRight ? `<div class="absolute top-3 right-3 z-20">${overlayRight}</div>` : ""}
@@ -716,6 +897,8 @@ onclick="viewVehicle('${v.id}')">
     </div>
 
     ${specGrid(v)}
+
+    ${detailHtml}
 
     <div class="mt-2 flex flex-wrap items-center gap-1.5">
       ${sellerBadge(v)}

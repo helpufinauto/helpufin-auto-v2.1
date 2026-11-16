@@ -116,6 +116,139 @@ document
 
 }
 
+/* ========================== */
+/* 🔥 GUEST LIMIT MESSAGE
+   Shared HUFA-style notice shown when a GUEST reaches the
+   save / compare limit. Never redirects the user away from
+   the page; offers Sign In / Create Account / Cancel. */
+/* ========================== */
+
+export function showGuestLimitModal(kind = "save"){
+
+const isCompare =
+kind === "compare";
+
+const limit =
+isCompare ? GUEST_COMPARE_LIMIT : GUEST_SAVE_LIMIT;
+
+const title =
+isCompare
+? "Guest Compare Limit Reached"
+: "Guest Save Limit Reached";
+
+const verb =
+isCompare ? "compare" : "save";
+
+showModal(`
+
+<div class="modal-box text-center space-y-3" style="max-width:420px;">
+
+  <div
+  style="
+  width:56px;
+  height:56px;
+  margin:0 auto;
+  border-radius:9999px;
+  background:rgba(0,91,191,.08);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  "
+  >
+
+    <svg
+    width="26"
+    height="26"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="#005BBF"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    >
+      <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-4-7 4V5z"/>
+    </svg>
+
+  </div>
+
+  <h2 class="text-xl font-bold text-[#08111F]">
+    ${title}
+  </h2>
+
+  <p class="text-sm text-slate-500" style="line-height:1.6;">
+    You can ${verb} up to ${limit} vehicles as a guest.
+    Sign in or create a free account to ${verb} more vehicles.
+  </p>
+
+  <div class="flex flex-col gap-2 pt-1">
+
+    <button
+      id="guestLimitSignIn"
+      type="button"
+      class="btn btn-gold w-full"
+    >
+      Sign In
+    </button>
+
+    <button
+      id="guestLimitSignUp"
+      type="button"
+      class="btn btn-dark w-full"
+    >
+      Create Account
+    </button>
+
+    <button
+      id="guestLimitCancel"
+      type="button"
+      class="w-full h-11 rounded-[12px] border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition-all"
+    >
+      Cancel
+    </button>
+
+  </div>
+
+</div>
+
+`);
+
+const go = (path)=>{
+
+  closeModal();
+
+  if(typeof window.navigate === "function"){
+    window.navigate(path);
+    return;
+  }
+
+  window.location.href = path;
+
+};
+
+const signIn =
+document.getElementById("guestLimitSignIn");
+
+if(signIn){
+  signIn.onclick = () => go("/login");
+}
+
+const signUp =
+document.getElementById("guestLimitSignUp");
+
+if(signUp){
+  signUp.onclick = () => go("/signup");
+}
+
+const cancel =
+document.getElementById("guestLimitCancel");
+
+if(cancel){
+  cancel.onclick = () => closeModal();
+}
+
+}
+
 
 
 /* ========================== */
@@ -305,25 +438,65 @@ show();
 /* ========================== */
 /* 🔥 GLOBAL COMPARE SYSTEM
    Comparison data is OWNER-SCOPED:
+   - Guests           → localStorage key "hufa_guest_compare_vehicles"
+     (browser-side only, capped at GUEST_COMPARE_LIMIT). This is the
+     SAME UI/data path as signed-in users, just a different key.
    - Logged-in users  → localStorage key "compare_<userId>"
-   - Logged-out users → NO comparison storage; the Compare
-     page is always empty until a user logs in. The legacy
-     shared "compare" key is never read or displayed.
+   The legacy shared "compare" key is never read or displayed, so a
+   visitor can never see a previous user's list.
    ========================== */
 
 import { getAuthUser } from "./api.js";
 
+import {
+  GUEST_COMPARE_KEY,
+  GUEST_COMPARE_LIMIT
+} from "./guestStore.js";
+
 /* Current compare-list owner: "guest" or a Supabase user id */
 let compareOwner = "guest";
 
+/* Existing authenticated compare cap (unchanged). */
+const MAX_COMPARE = 2;
+
 function compareKey(){
 
-  /* Logged-out users have NO comparison storage:
-     the legacy shared "compare" key is never read,
-     so a guest can never see a previous user's list. */
+  /* Owner-scoped storage:
+     - Guests          → their own browser-side guest key (never a
+       previous user's list, and never the legacy shared "compare").
+     - Signed-in users → the existing "compare_<userId>" key. */
   return compareOwner === "guest"
-    ? null
+    ? GUEST_COMPARE_KEY
     : `compare_${compareOwner}`;
+
+}
+
+/* The active cap for the current owner. Guests use the centralised
+   guest limit; authenticated users keep the existing cap. */
+function compareLimit(){
+
+  return compareOwner === "guest"
+    ? GUEST_COMPARE_LIMIT
+    : MAX_COMPARE;
+
+}
+
+/* Read a compare list straight from storage (no owner logic). */
+function readCompareKey(key){
+
+  try{
+
+    const parsed = JSON.parse(
+      localStorage.getItem(key) || "[]"
+    );
+
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+
+  }catch(e){
+
+    return [];
+
+  }
 
 }
 
@@ -347,8 +520,43 @@ export async function syncCompareOwner(){
 
   if(nextOwner === compareOwner) return;
 
-  /* No legacy migration: guest/previous-session "compare"
-     data is never adopted into a user account. */
+  const previousOwner = compareOwner;
+
+  /* SIGN-IN TRANSITION — preserve guest compare selections.
+     Merge the guest list into the new user's list (deduped and
+     capped) then clear the guest key. No duplicate entries and no
+     change to the authenticated storage design. */
+  if(previousOwner === "guest" && nextOwner !== "guest"){
+
+    try{
+
+      const guestList = readCompareKey(GUEST_COMPARE_KEY);
+
+      if(guestList.length){
+
+        const userKey = `compare_${nextOwner}`;
+
+        const merged =
+          [...new Set([...readCompareKey(userKey), ...guestList])]
+          .slice(0, MAX_COMPARE);
+
+        localStorage.setItem(
+          userKey,
+          JSON.stringify(merged)
+        );
+
+        localStorage.removeItem(GUEST_COMPARE_KEY);
+
+      }
+
+    }catch(e){
+
+      /* storage unavailable — ignore */
+
+    }
+
+  }
+
   compareOwner = nextOwner;
 
   /* Reload every compare-driven UI with the correct owner's list */
@@ -364,23 +572,10 @@ export function getCompare(){
 
   const key = compareKey();
 
-  if(!key) return []; /* logged out: always empty */
-
-  try{
-
-    const parsed = JSON.parse(
-      localStorage.getItem(key) || "[]"
-    );
-
-    /* Normalize legacy/oversized lists to the current
-       2-vehicle maximum, preserving the first 2 entries. */
-    return Array.isArray(parsed) ? parsed.slice(0, 2) : [];
-
-  }catch(e){
-
-    return [];
-
-  }
+  /* Normalize legacy/oversized lists to the active owner's
+     maximum (guest limit or the existing authenticated cap),
+     preserving the first entries. */
+  return readCompareKey(key).slice(0, compareLimit());
 
 }
 
@@ -390,14 +585,12 @@ export function setCompare(compare){
 
   const key = compareKey();
 
-  /* Logged out: nothing is stored or updated */
-  if(!key) return;
-
-  /* Hard cap: never store more than 2 vehicles */
+  /* Hard cap: never store more than the active owner's maximum */
   localStorage.setItem(
     key,
     JSON.stringify(
-      Array.isArray(compare) ? compare.slice(0, 2) : []
+      (Array.isArray(compare) ? compare : [])
+      .slice(0, compareLimit())
     )
   );
 
@@ -435,12 +628,21 @@ export function toggleCompare(id){
 
   }
 
-  if(compare.length >= 2){
+  if(compare.length >= compareLimit()){
 
-    /* Compare limit: maximum 2 vehicles per user.
-       Blocks only NEW additions — removing an
-       already-compared vehicle (handled above) still works. */
-    toast("Compare is limited to 2 vehicles.");
+    /* Compare limit reached. Blocks only NEW additions — removing an
+       already-compared vehicle (handled above) still works.
+       Guests get the dedicated HUFA guest-limit message; signed-in
+       users keep the existing notice. */
+    if(compareOwner === "guest"){
+
+      showGuestLimitModal("compare");
+
+    }else{
+
+      toast("Compare is limited to 2 vehicles.");
+
+    }
 
     return false;
 
@@ -460,12 +662,14 @@ export function toggleCompare(id){
 
 export function clearCompare(){
 
-  /* Clears ONLY the current owner's list (no-op when logged out) */
+  /* Clears ONLY the current owner's list (guest key or user key) */
   const key = compareKey();
 
-  if(!key) return;
-
-  localStorage.removeItem(key);
+  try{
+    localStorage.removeItem(key);
+  }catch(e){
+    /* ignore */
+  }
 
   window.dispatchEvent(
     new Event("compareUpdated")

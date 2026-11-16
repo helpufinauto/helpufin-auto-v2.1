@@ -8,9 +8,15 @@ MODULE PREFETCH CACHE
 
 const moduleCache = {};
 
+/* Failed paths may bypass the successful same-path navigation guard. */
+
+const failedRoutePaths = new Set();
+
 async function prefetchPage(routeKey){
 
 if(moduleCache[routeKey]) return;
+
+let pending;
 
 try{
 
@@ -19,10 +25,15 @@ lazyPages[routeKey];
 
 if(!loader) return;
 
-moduleCache[routeKey] =
-loader();
+pending = loader();
+moduleCache[routeKey] = pending;
+await pending;
 
 }catch(err){
+
+if(pending && moduleCache[routeKey] === pending){
+  delete moduleCache[routeKey];
+}
 
 console.warn(
 "Prefetch failed:",
@@ -690,6 +701,29 @@ Return Home
 
 }
 
+/* Replace stale page content with a retryable route error. */
+function handleFailedNavigation(path, error){
+
+  failedRoutePaths.add(path);
+  const root = document.getElementById("app");
+
+  if(root){
+    root.innerHTML = `
+      <div role="alert" class="min-h-[60vh] flex items-center justify-center text-center p-10">
+        <div>
+          <h1 class="text-3xl font-black mb-4 text-[#08111F]">This page did not load</h1>
+          <p class="text-gray-500 mb-6">The requested page could not be loaded. Please try again.</p>
+          <button type="button" data-route-retry class="bg-[#005BBF] text-white px-6 py-3 rounded-2xl font-semibold">Retry</button>
+        </div>
+      </div>
+    `;
+    root.querySelector("[data-route-retry]").addEventListener("click", ()=> navigate(path));
+  }
+
+  console.error("[router] Page load failed:", path, error);
+}
+
+
 /* =========================================
 PHASE 2 â€” PREFETCH EXPORT
 Expose the existing internal prefetchPage so
@@ -1214,12 +1248,58 @@ moduleCache[routeKey]
 moduleCache[routeKey] =
 PagePromise;
 
-const Page =
-await PagePromise;
+/* =========================================
+PHASE 1 - LAZY IMPORT RECOVERY
+=========================================
+A rejected lazy import must never stay in moduleCache and must
+never leave the SPA stuck: the rejection is caught HERE, so EVERY
+entry point that renders a route gets the same recoverable state -
+navigate(), the initial renderApp() AND popstate (app.js calls the
+same router()).
+
+Recovery contract:
+  • the rejected promise is deleted from moduleCache, but ONLY when
+    the cached entry is still the exact promise that failed
+    (identity check) - an already-resolved, valid module promise is
+    never discarded;
+  • the path is flagged failed, which keeps it retryable through
+    the existing same-path guard in navigate();
+  • the pending view is replaced by the recoverable error panel, so
+    the address bar never claims a route whose content is not
+    displayed;
+  • a SUCCESSFUL load clears the flag (after the render below), so
+    caching and the same-path optimisation are unchanged for
+    routes that load normally;
+  • a render/component failure that is NOT an import failure is
+    surfaced by navigate()'s own catch (same recoverable panel),
+    and the next attempt re-runs the route from the cache. */
+
+let Page;
+
+try{
+
+  Page =
+  await PagePromise;
+
+}catch(loadError){
+
+  if(moduleCache[routeKey] === PagePromise){
+
+    delete moduleCache[routeKey];
+
+  }
+
+  handleFailedNavigation(path, loadError);
+
+  return;
+
+}
 
 /* =========================================
 RENDER PAGE
 ========================================= */
+
+try{
 
 if(routeKey === "helpufin"){
 
@@ -1230,6 +1310,14 @@ await Page.HelpufinPage();
 
 page =
 await Page();
+
+}
+
+}catch(renderError){
+
+handleFailedNavigation(path, renderError);
+
+return;
 
 }
 
@@ -1346,6 +1434,11 @@ ${page}
 </div>
 `;
 
+/* PHASE 1 - the route rendered successfully, so it must never be
+   treated as failed again: the same-path optimisation in navigate()
+   keeps its exact original behaviour for it. */
+failedRoutePaths.delete(path);
+
 if(
 routeKey === "helpufin" &&
 typeof Page.initialiseHelpufin === "function"
@@ -1434,6 +1527,18 @@ navigationInProgress = true;
   stripBase(window.location.pathname) +
   window.location.search;
 
+  /* PHASE 1 - ROUTER RECOVERY.
+     This wraps the EXISTING same-path optimisation: a path whose last
+     load FAILED must stay retryable (it skips the early return below
+     and re-runs the route), while a normal click on the page that is
+     already displayed stays a no-op exactly as before.
+     failedRoutePaths is empty for a working route - it is cleared
+     after every successful render. */
+  const isFailedPath =
+  failedRoutePaths.has(path);
+
+  if(!isFailedPath){
+
   if(
     currentLogicalPath === path
   ){
@@ -1442,6 +1547,16 @@ navigationInProgress = true;
 
     return;
   }
+
+  }
+
+  /* PHASE 1 - a retry of a failed path is already in the address bar,
+     so the existing history entry is reused rather than stacking a
+     duplicate one on top of the failed entry. */
+  const isSamePath =
+  currentLogicalPath === path;
+
+  if(!isSamePath){
 
   history.pushState(
 {
@@ -1453,6 +1568,8 @@ timestamp:Date.now()
 route(path)
 );
 
+  }
+
   requestAnimationFrame(async ()=>{
 
     try{
@@ -1463,6 +1580,18 @@ route(path)
         top: 0,
         behavior: "auto"
       });
+
+    }catch(navigationError){
+
+      /* PHASE 1 - the page module could not be imported, or the page
+         could not be rendered. router() has ALREADY removed the
+         rejected promise from moduleCache (identity-checked), so
+         nothing is permanently cached and the route can be retried.
+         handleFailedNavigation() flags the path (which keeps the
+         same-path optimisation retry-aware) and replaces the pending
+         view with the recoverable panel, so the address bar never
+         claims a route whose content is not displayed. */
+      handleFailedNavigation(path, navigationError);
 
     }finally{
 

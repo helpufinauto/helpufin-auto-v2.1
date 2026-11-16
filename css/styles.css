@@ -1249,6 +1249,107 @@ inset 0 1px 0 rgba(255,255,255,0.12)
         flex-basis: 100%
     }
 }
+
+/* Compare page detailed specification matrix. */
+.compare-detailed-section {
+    min-width: 0;
+    margin: 24px 0 32px;
+}
+.compare-detailed-section > h2 {
+    margin: 0 0 12px;
+}
+.compare-detail-scroll {
+    border: 1px solid #E2E8F0;
+    border-radius: 14px;
+    background: #FFFFFF;
+    box-shadow: 0 4px 16px rgba(15,23,42,0.04);
+}
+.compare-detailed-table {
+    width: 100%;
+    min-width: max-content;
+    overflow: hidden;
+    border-radius: inherit;
+    background: #FFFFFF;
+}
+.compare-detail-header,
+.compare-detail-row {
+    display: grid;
+    align-items: stretch;
+}
+.compare-detail-header {
+    min-height: 48px;
+    border-bottom: 1px solid #E2E8F0;
+    background: #F8FAFC;
+}
+.compare-detail-spec,
+.compare-detail-vehicle,
+.compare-detail-value {
+    min-width: 0;
+    padding: 11px 13px;
+    border-bottom: 1px solid #F1F5F9;
+    font-size: 12px;
+    line-height: 1.45;
+}
+.compare-detail-spec {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #FAFBFC;
+    color: #475569;
+    font-weight: 650;
+    box-shadow: 1px 0 0 #E2E8F0;
+}
+.compare-detail-header .compare-detail-spec {
+    z-index: 3;
+    background: #F8FAFC;
+    color: #64748B;
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+.compare-detail-vehicle {
+    color: #0F172A;
+    font-weight: 750;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+.compare-detail-value {
+    color: #334155;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+.compare-detail-group-title {
+    padding: 10px 13px;
+    border-bottom: 1px solid #E2E8F0;
+    background: #EFF6FF;
+    color: #1E3A5F;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: .035em;
+}
+.compare-detail-group .compare-detail-row:last-child > div {
+    border-bottom: 1px solid #F1F5F9;
+}
+.compare-detail-empty {
+    margin: 0;
+    padding: 16px;
+    color: #64748B;
+    font-size: 13px;
+}
+.compare-detail-scroll .compare-detail-spec,
+.compare-detail-scroll .compare-detail-vehicle,
+.compare-detail-scroll .compare-detail-value {
+    min-height: 42px;
+}
+
+@media (max-width: 767px) {
+    .compare-detailed-section { margin: 20px 0 26px; }
+    .compare-detail-spec,
+    .compare-detail-vehicle,
+    .compare-detail-value { padding: 10px; font-size: 11px; }
+    .compare-detail-group-title { padding: 9px 10px; }
+}
 @media (max-width:1279.98px) {
     #crmLeadTable > div > .flex.justify-between.items-start.mb-4 {
         align-items: flex-start;
@@ -2764,170 +2865,172 @@ scale(1)
         max-width: 100px;
         height: 34px
     }
-    #results.grid {
+    #results.grid , #savedList.grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px
     }
-    #results .vehicle-card .relative.overflow-hidden {
+    #results .vehicle-card .relative.overflow-hidden , #savedList .vehicle-card .relative.overflow-hidden {
         aspect-ratio: 4 / 3;
         height: auto
     }
-    #results .vehicle-card img {
+    #results .vehicle-card img , #savedList .vehicle-card img {
         object-fit: cover;
         width: 100%;
         height: 100%
     }
-    #results .vehicle-card-body {
+    #results .vehicle-card-body , #savedList .vehicle-card-body {
         padding: 8px
     }
-    #results .vehicle-card .text-sm.font-semibold {
+    #results .vehicle-card .text-sm.font-semibold , #savedList .vehicle-card .text-sm.font-semibold {
         font-size: 12px;
         font-weight: 600;
         min-height: 30px;
         line-height: 1.25
     }
-    #results .vehicle-card .text-base.font-bold {
+    #results .vehicle-card .text-base.font-bold , #savedList .vehicle-card .text-base.font-bold {
         font-size: 15px;
         font-weight: 800
     }
-    #results .vehicle-card .vehicle-meta {
+    #results .vehicle-card .vehicle-meta , #savedList .vehicle-card .vehicle-meta {
         font-size: 10px;
         margin-top: 6px;
         gap: 5px
     }
-    #results .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 {
+    #results .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 , #savedList .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 {
         display: none
     }
-    #results .vehicle-card .inline-flex.items-center.gap-2.px-3.py-1 {
+    #results .vehicle-card .inline-flex.items-center.gap-2.px-3.py-1 , #savedList .vehicle-card .inline-flex.items-center.gap-2.px-3.py-1 {
         padding: 3px 8px;
         font-size: 9px;
         border-radius: 999px
     }
-    #results .vehicle-card .border-t.border-slate-100 {
+    #results .vehicle-card .border-t.border-slate-100 , #savedList .vehicle-card .border-t.border-slate-100 {
         margin-top: 6px;
         padding-top: 6px;
         font-size: 11px
     }
-    #results .vehicle-card .w-8.h-8 {
+    #results .vehicle-card .w-8.h-8 , #savedList .vehicle-card .w-8.h-8 {
         width: 28px;
         height: 28px
     }
-    #results .vehicle-card .w-8.h-8 svg {
+    #results .vehicle-card .w-8.h-8 svg , #savedList .vehicle-card .w-8.h-8 svg {
         width: 16px;
         height: 16px
     }
-    #results .vehicle-card .px-3.py-1 {
+    #results .vehicle-card .px-3.py-1 , #savedList .vehicle-card .px-3.py-1 {
         padding: 2px 6px;
         font-size: 8px;
         letter-spacing: 0.04em
     }
-    #results .vehicle-card .absolute.top-3.left-3 {
+    #results .vehicle-card .absolute.top-3.left-3 , #savedList .vehicle-card .absolute.top-3.left-3 {
         top: 6px;
         left: 6px;
         gap: 4px;
         flex-wrap: wrap;
         max-width: calc(100% - 12px)
     }
-    #results .vehicle-card .text-\[11px\].text-slate-400 {
+    #results .vehicle-card .text-\[11px\].text-slate-400 , #savedList .vehicle-card .text-\[11px\].text-slate-400 {
         font-size: 9px
     }
-    #results .vehicle-card .px-2.py-0\.5 {
+    #results .vehicle-card .px-2.py-0\.5 , #savedList .vehicle-card .px-2.py-0\.5 {
         padding: 1px 5px;
         font-size: 8px
     }
-    #results .vehicle-card .px-3.py-1 {
+    #results .vehicle-card .px-3.py-1 , #savedList .vehicle-card .px-3.py-1 {
         padding: 2px 8px;
         font-size: 9px;
         border-radius: 999px
     }
-    #results .vehicle-card-list {
+    #results .vehicle-card-list , #savedList .vehicle-card-list {
         flex-direction: row;
-        align-items: stretch;
-        gap: 10px;
-        padding: 8px;
+        align-items: flex-start;
+        gap: 14px;
+        padding: 12px;
         min-width: 0
     }
-    #results .vehicle-card-list .relative.flex-shrink-0 {
+    #results .vehicle-card-list .relative.flex-shrink-0 , #savedList .vehicle-card-list .relative.flex-shrink-0 {
         width: 40%;
         min-width: 0;
         max-width: none;
-        height: clamp(96px, 27vw, 118px);
+        height: clamp(115px, 125px, 160px);
         align-self: center;
         border-radius: 10px;
         background: #f1f5f9;
         overflow: hidden
     }
-    #results .vehicle-card-list .relative.flex-shrink-0 img {
-        object-fit: contain;
+    #results .vehicle-card-list .relative.flex-shrink-0 img , #savedList .vehicle-card-list .relative.flex-shrink-0 img {
+        object-fit: cover;
         object-position: center;
         width: 100%;
         height: 100%
     }
-    #results .vehicle-card-list .flex-1.min-w-0 {
-        padding: 2px 4px 2px 0;
+    #results .vehicle-card-list .flex-1.min-w-0 , #savedList .vehicle-card-list .flex-1.min-w-0 {
+        padding: 0;
         min-width: 0;
         overflow-wrap: break-word;
-        justify-content: center
+        flex-direction: column;
+        justify-content: flex-start
     }
-    #results .vehicle-card-list .text-sm.font-semibold {
+    #results .vehicle-card-list .text-sm.font-semibold , #savedList .vehicle-card-list .text-sm.font-semibold {
         font-size: 15px;
         line-height: 1.3;
         overflow-wrap: break-word;
         word-break: normal;
         min-height: 0
     }
-    #results .vehicle-card-list .text-base.font-bold {
+    #results .vehicle-card-list .text-base.font-bold , #savedList .vehicle-card-list .text-base.font-bold {
         font-size: 19px;
         line-height: 1.2
     }
-    #results .vehicle-card-list .flex-1.min-w-0 > .mt-1.text-xs {
+    #results .vehicle-card-list .flex-1.min-w-0 > .mt-1.text-xs , #savedList .vehicle-card-list .flex-1.min-w-0 > .mt-1.text-xs {
         font-size: 12.5px;
         line-height: 1.35;
         margin-top: 2px
     }
-    #results .vehicle-card-list .vehicle-meta {
+    #results .vehicle-card-list .vehicle-meta , #savedList .vehicle-card-list .vehicle-meta {
         font-size: 12.5px;
         gap: 6px;
         line-height: 1.4;
         margin-top: 4px
     }
-    #results .vehicle-card-list .mt-1\.5.flex.items-center.justify-between {
+    #results .vehicle-card-list .mt-1\.5.flex.items-center.justify-between , #savedList .vehicle-card-list .mt-1\.5.flex.items-center.justify-between {
         font-size: 12.5px;
         flex-wrap: wrap;
         gap: 6px;
         margin-top: 4px
     }
-    #results .vehicle-card-list .max-w-\[200px\] {
+    #results .vehicle-card-list .max-w-\[200px\] , #savedList .vehicle-card-list .max-w-\[200px\] {
         max-width: 100%
     }
-    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 {
+    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 , #savedList .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 {
         position: static;
         padding: 0;
         flex-direction: column;
         justify-content: center;
         align-self: flex-end;
-        margin-left: auto
+        margin-left: auto;
+        margin-top: auto
     }
-    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button {
+    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button , #savedList .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button {
         width: 40px;
         height: 40px
     }
-    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button svg {
+    #results .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button svg , #savedList .vehicle-card-list .flex-shrink-0.flex.items-center.gap-2 button svg {
         width: 18px;
         height: 18px
     }
-    #results .vehicle-card-list .px-2\.5.py-0\.5 {
+    #results .vehicle-card-list .px-2\.5.py-0\.5 , #savedList .vehicle-card-list .px-2\.5.py-0\.5 {
         padding: 2px 8px;
         font-size: 11px
     }
-    #results .vehicle-card-list .flex-1.min-w-0 > .mt-1\.5.flex.flex-wrap {
+    #results .vehicle-card-list .flex-1.min-w-0 > .mt-1\.5.flex.flex-wrap , #savedList .vehicle-card-list .flex-1.min-w-0 > .mt-1\.5.flex.flex-wrap {
         margin-top: 4px;
         row-gap: 3px
     }
-    #results {
+    #results , #savedList {
         max-width: 100%
     }
-    #results .vehicle-card {
+    #results .vehicle-card , #savedList .vehicle-card {
         min-width: 0
     }
 }
@@ -6906,10 +7009,263 @@ rgba(0,0,0,0) 97%
     }
 }
 .saved-page {}
-.saved-page-title {
-    font-size: clamp(1.35rem,3.2vw,1.7rem);
-    line-height: 1.05
+.saved-page #savedFilterToolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    margin-bottom: 24px;
 }
+
+@media (min-width: 640px) {
+    .saved-page #savedFilterToolbar {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+    }
+}
+
+/* Desktop toolbar: flatten the existing Browse/Search/Sort group so every
+   control and the view toggle can share one balanced row. */
+@media (min-width: 640px) and (max-width: 1199px) {
+    .saved-page #savedFilterToolbar {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+    }
+    .saved-page #savedFilterToolbar > div:first-child {
+        display: flex;
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        width: 100%;
+    }
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(2),
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(3) {
+        width: auto;
+        min-width: 220px;
+        flex: 1 1 220px;
+    }
+    .saved-page #savedFilterToolbar .saved-results-count {
+        order: 4;
+    }
+    .saved-page #savedFilterToolbar #savedViewToggle {
+        order: 5;
+        margin-bottom: 0;
+    }
+}
+
+@media (min-width: 1200px) {
+    .saved-page #savedFilterToolbar {
+        justify-content: flex-start;
+        gap: 14px;
+    }
+    .saved-page #savedFilterToolbar > div:first-child {
+        display: contents;
+    }
+    .saved-page #savedFilterToolbar > div:first-child > button {
+        order: 1;
+        white-space: nowrap;
+    }
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(2),
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(3) {
+        width: auto;
+        min-width: 0;
+        flex: 1 1 0;
+    }
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(2) {
+        order: 2;
+    }
+    .saved-page #savedFilterToolbar > div:first-child > div:nth-child(3) {
+        order: 3;
+    }
+    .saved-page #savedFilterToolbar #savedViewToggle {
+        order: 4;
+        flex: 0 0 auto;
+        margin-bottom: 0;
+    }
+    .saved-page #savedFilterToolbar .saved-results-count {
+        order: 5;
+        flex: 0 0 auto;
+        white-space: nowrap;
+    }
+}
+
+/* --- Saved search: hide native browser clear button (only custom clear button) --- */
+.saved-page #savedSearchInput::-webkit-search-cancel-button {
+    display: none;
+}
+
+.saved-page #savedSearchInput::-webkit-search-decoration,
+.saved-page #savedSearchInput::-webkit-search-spin-button {
+    display: none;
+}
+
+.saved-page #savedSearchInput::-moz-search-clear-button {
+    display: none;
+}
+
+.saved-page #savedFilterToolbar > button:first-child {
+    margin-left: 0;
+}
+
+.saved-page #savedFilterToolbar .flex-shrink-0 {
+    flex-shrink: 0;
+}
+
+.saved-page #savedFilterToolbar .saved-results-count {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 12px;
+    height: 40px;
+    border-radius: 10px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    font-size: 12px;
+    font-weight: 500;
+    color: #64748B;
+}
+
+.saved-page #savedFilterToolbar .saved-results-count.hidden {
+    display: none;
+}
+
+@media (max-width: 639px) {
+    .saved-page #savedFilterToolbar {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+    .saved-page #savedFilterToolbar > div:first-child {
+        display: flex;
+        flex: 0 0 100%;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        width: 100%;
+    }
+    .saved-page #savedSearchInput,
+    .saved-page #savedSortSelect {
+        height: 40px;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
+    .saved-page #savedFilterToolbar .saved-results-count {
+        order: 2;
+        width: auto;
+        height: 36px;
+        padding-right: 10px;
+        padding-left: 10px;
+        text-align: left;
+    }
+    .saved-page #savedFilterToolbar #savedViewToggle {
+        order: 3;
+        margin-bottom: 0;
+        margin-left: auto;
+    }
+}
+
+/* Grid / List view toggle buttons */
+.saved-page #savedViewToggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.saved-page #savedViewToggle button {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    border: 1px solid #CBD5E1;
+    background: #FFFFFF;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.saved-page #savedViewToggle button svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Active grid button (border-[#3B82F6] bg-[#3B82F6]/10 text-[#3B82F6]) */
+.saved-page #savedViewToggle button[class*="border-[#3B82F6]"][class*="bg-[#3B82F6]/10"] {
+    border-color: #3B82F6;
+    background: rgba(59, 130, 246, 0.1);
+    color: #3B82F6;
+}
+
+/* Active list button (same active classes) */
+.saved-page #savedViewToggle button[class*="border-[#3B82F6]"][class*="bg-[#3B82F6]/10"] {
+    border-color: #3B82F6;
+    background: rgba(59, 130, 246, 0.1);
+    color: #3B82F6;
+}
+
+.saved-page #savedViewToggle button:hover {
+    border-color: #3B82F6;
+    background: rgba(59, 130, 246, 0.05);
+    color: #3B82F6;
+}
+
+/* Saved results count badge (saved-count badge) */
+.saved-page .saved-summary {
+    padding: 8px 14px 8px 10px;
+    border-radius: 12px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 4px 16px rgba(15,23,42,0.04),
+                0 1px 3px rgba(15,23,42,0.02);
+}
+
+.saved-page .saved-summary-icon {
+    color: #0A58FF;
+    background: rgba(10,88,255,0.08);
+}
+
+.saved-page .saved-summary-count {
+    letter-spacing: -0.03em;
+}
+
+.saved-page .saved-summary-label {
+    letter-spacing: 0.02em;
+}
+
+/* ---------- SAVED GRID — FIX 5-COLUMN LAYOUT AT DESKTOP ---------- */
+
+/* Ensure the grid uses 5 columns at xl breakpoint and above */
+.saved-page .saved-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+@media (min-width: 768px) {
+    .saved-page .saved-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .saved-page .saved-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+    }
+}
+
+@media (min-width: 1280px) {
+    .saved-page .saved-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 16px;
+    }
+}
+
+/* Ensure 5 columns at xl (1280px) and above for saved grid */
 .saved-summary {
     padding: 8px 14px 8px 10px;
     border-radius: 12px;
@@ -6937,7 +7293,9 @@ rgba(0,0,0,0) 97%
 }
 .saved-grid .vehicle-card {
     box-shadow: 0 8px 24px rgba(15,23,42,0.06),
-    0 1px 4px rgba(15,23,42,0.03)
+    0 1px 4px rgba(15,23,42,0.03);
+    /* Match skeleton layout: vertical flex column */
+    flex-direction: column;
 }
 .saved-grid .vehicle-card:hover {
     transform: translateY(-4px);
@@ -6946,9 +7304,10 @@ rgba(0,0,0,0) 97%
     0 0 0 1px rgba(10,88,255,0.08)
 }
 .saved-grid .vehicle-card .relative.overflow-hidden {
-    aspect-ratio: 16 / 9;
-    height: auto;
-    max-height: 200px
+    /* Match skeleton: fixed image height of 130px, same as skeleton cards */
+    height: 130px;
+    /* Keep aspect ratio flexible to fill the 130px height */
+    aspect-ratio: auto;
 }
 .saved-grid .vehicle-card img {
     object-fit: cover;
@@ -6957,7 +7316,10 @@ rgba(0,0,0,0) 97%
 }
 @media (min-width:640px) {
     .saved-grid .vehicle-card .relative.overflow-hidden {
-        aspect-ratio: 4 / 3;
+        /* Match skeleton at desktop: still 130px height */
+        height: 130px;
+        /* aspect ratio is now auto set in the base rule */
+        aspect-ratio: auto;
         max-height: none
     }
 }
@@ -7128,9 +7490,11 @@ rgba(0,0,0,0) 97%
     max-height: 210px
 }
 .compare-page .vehicle-card img {
-    object-fit: cover;
+    object-fit: contain;
+    object-position: center;
     width: 100%;
-    height: 100%
+    height: 100%;
+    background: #F1F5F9
 }
 .compare-page .vehicle-card-body {
     padding: 8px 10px 10px
@@ -7437,6 +7801,195 @@ rgba(0,0,0,0) 97%
         max-width: none;
         padding: 0 8px
     }
+}
+
+/* Compare page search, sorting and contained mobile comparison table. */
+.compare-page,
+.compare-page #compareBox {
+    min-width: 0;
+    max-width: 100%;
+}
+.compare-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    align-items: end;
+    gap: 14px;
+    margin: 0 0 20px;
+    padding: 14px;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    background: #FFFFFF;
+    box-shadow: 0 4px 16px rgba(15,23,42,0.04);
+}
+.compare-search-wrap,
+.compare-sort-wrap {
+    position: relative;
+    min-width: 0;
+}
+.compare-control-label {
+    display: block;
+    margin-bottom: 6px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+}
+.compare-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.compare-search-icon {
+    position: absolute;
+    left: 13px;
+    width: 17px;
+    height: 17px;
+    color: #94A3B8;
+    pointer-events: none;
+}
+.compare-search-input,
+.compare-sort-select {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    border: 1px solid #CBD5E1;
+    border-radius: 11px;
+    background: #FFFFFF;
+    color: #081120;
+    font-size: 13px;
+    outline: none;
+    transition: border-color .18s ease, box-shadow .18s ease;
+}
+.compare-search-input {
+    padding: 10px 13px 10px 40px;
+}
+.compare-sort-select {
+    padding: 10px 34px 10px 12px;
+}
+.compare-search-input:focus,
+.compare-sort-select:focus {
+    border-color: #3B82F6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.12);
+}
+.compare-suggestions {
+    position: absolute;
+    z-index: 40;
+    top: calc(100% + 5px);
+    left: 0;
+    right: 0;
+    max-height: min(360px, 55vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    background: #FFFFFF;
+    box-shadow: 0 16px 42px rgba(15,23,42,.16);
+}
+.compare-suggestion {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 11px;
+    border: 0;
+    border-bottom: 1px solid #F1F5F9;
+    background: #FFFFFF;
+    color: #0F172A;
+    text-align: left;
+    cursor: pointer;
+}
+.compare-suggestion:last-child { border-bottom: 0; }
+.compare-suggestion:hover,
+.compare-suggestion[aria-selected="true"] { background: #F8FAFC; }
+.compare-suggestion.is-compared { cursor: default; }
+.compare-suggestion-image {
+    display: flex;
+    width: 54px;
+    height: 42px;
+    flex: 0 0 54px;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 8px;
+    background: #F1F5F9;
+}
+.compare-suggestion-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.compare-suggestion-image-fallback {
+    color: #64748B;
+    font-weight: 800;
+}
+.compare-suggestion-name,
+.compare-suggestion-meta {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.compare-suggestion-name { font-size: 12px; font-weight: 700; }
+.compare-suggestion-meta { margin-top: 2px; color: #64748B; font-size: 10px; }
+.compare-suggestion-status {
+    flex: 0 0 auto;
+    color: #005BBF;
+    font-size: 10px;
+    font-weight: 700;
+}
+.compare-suggestion.is-compared .compare-suggestion-status { color: #64748B; }
+.compare-suggestion-message {
+    padding: 13px 14px;
+    color: #64748B;
+    font-size: 12px;
+}
+.compare-suggestion-skeleton {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 11px;
+    border-bottom: 1px solid #F1F5F9;
+}
+.compare-page .compare-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 14px;
+}
+.compare-page .compare-grid > * { min-width: 0; }
+.compare-page .compare-card-shell { min-width: 0; height: 100%; }
+.compare-page .vehicle-card { min-width: 0; }
+.compare-page .vehicle-card .relative.overflow-hidden {
+    max-height: 184px;
+}
+.compare-table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.compare-table-scroll .compare-table { min-width: 0; }
+.compare-page .compare-previews-section { margin-bottom: 18px; }
+
+@media (max-width: 767px) {
+    .compare-tools {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+        margin-bottom: 16px;
+        padding: 12px;
+    }
+    .compare-page .compare-grid { grid-template-columns: minmax(0, 1fr); }
+    .compare-page .vehicle-card .relative.overflow-hidden { max-height: 210px; }
+    .compare-table-scroll .compare-table { min-width: 500px; }
+}
+
+@media (max-width: 360px) {
+    .compare-tools { padding: 10px; }
+    .compare-search-input,
+    .compare-sort-select { min-height: 42px; font-size: 12px; }
+    .compare-suggestion { gap: 8px; padding: 8px; }
+    .compare-suggestion-status { font-size: 9px; }
 }
 @media (max-width:360px) {
     .compare-table-head,
@@ -10184,27 +10737,129 @@ rgba(238,243,249,0) 100%
     border-color: #E48A2F;
     box-shadow: 0 4px 14px rgba(8,17,31,0.08)
 }
-.hufa-form #preview .hufa-image-slot:first-child {
-    position: relative
-}
 .hufa-form #preview .hufa-image-slot:first-child img::before {
     content: none
 }
-.hufa-form #preview .hufa-image-slot:first-child::after {
-    content: "Cover";
+/* PHASE 3 — Upload Vehicle image manager: drop highlight,
+   numeric position badge, "Cover" label (position 1 only)
+   and Manage-Vehicle-style reorder buttons. No emoji and no
+   pseudo-element star/cover text: badges are explicit DOM. */
+.hufa-form #dropZone.hufa-dropzone--dragover {
+    border-color: #E48A2F;
+    background: #FFF7ED;
+    box-shadow: inset 0 0 0 1.5px rgba(228,138,47,0.28)
+}
+.hufa-form #preview .hufa-image-slot .hufa-image-frame {
+    position: relative
+}
+.hufa-form #preview .hufa-image-position {
     position: absolute;
-    top: 10px;
-    left: 10px;
+    top: 8px;
+    left: 8px;
     z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(8,17,31,0.85);
+    color: #FFFFFF;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none
+}
+.hufa-form #preview .hufa-image-cover {
+    position: absolute;
+    top: 8px;
+    left: 40px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 8px;
+    border-radius: 6px;
     background: #E48A2F;
     color: #08111F;
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    padding: 3px 8px;
-    border-radius: 6px;
+    line-height: 1;
     pointer-events: none
+}
+.hufa-form #preview .hufa-image-move {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 3;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.95);
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.10);
+    color: #08111F;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color .2s ease,color .2s ease,border-color .2s ease
+}
+.hufa-form #preview .hufa-image-move:hover {
+    background: #E48A2F;
+    border-color: #E48A2F;
+    color: #FFFFFF
+}
+.hufa-form #preview .hufa-image-move-left {
+    left: 8px
+}
+.hufa-form #preview .hufa-image-move-right {
+    right: 8px
+}
+.hufa-form #preview .hufa-image-cover-static {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 11px;
+    font-weight: 700;
+    color: #E48A2F;
+    background: #FFF7ED;
+    border: 1px solid #FDE8D2;
+    pointer-events: none
+}
+@media (max-width:640px){
+    .hufa-form #preview .hufa-image-move {
+        width: 32px;
+        height: 32px
+    }
+    .hufa-form #preview .hufa-image-cover {
+        left: 42px
+    }
+}
+/* PHASE 5 — drag-and-drop reorder affordances for the Upload
+Vehicle image manager. Visual-only classes: no emoji, no
+pseudo-element content, matching the existing badge styling. */
+.hufa-form #preview .hufa-image-slot[draggable="true"] {
+    cursor: grab
+}
+.hufa-form #preview .hufa-image-slot--dragging {
+    opacity: 0.45;
+    cursor: grabbing
+}
+.hufa-form #preview .hufa-image-slot--drop-target {
+    border-color: #E48A2F;
+    box-shadow: 0 0 0 2px rgba(228,138,47,0.45)
+}
+@media (max-width:640px){
+    .hufa-form #preview .hufa-image-slot[draggable="true"] {
+        cursor: default
+    }
 }
 .hufa-form #preview .hufa-empty-images {
     background: #FBFCFD;
@@ -16126,7 +16781,7 @@ Layout goals:
 }
 .compare-page{background:none}
 #app:has(.compare-page){background:linear-gradient(rgba(255,255,255,0.55),rgba(255,255,255,0.55)),url('../assets/compare.png') center top/cover no-repeat}
-@media (max-width:640px){.compare-page{background:none}#app:has(.compare-page){background-position:center top;background-size:cover}}
+@media (max-width:640px){.compare-page{background:none}#app:has(.compare-page){background-position:center top;background-size:cover;background-attachment:fixed}}
 .saved-page{background:none}
 #app:has(.saved-page){background:linear-gradient(rgba(255,255,255,0.55),rgba(255,255,255,0.55)),url('../assets/saved.png') center top/cover no-repeat}
 @media (max-width:640px){.saved-page{background:none}#app:has(.saved-page){background-position:center top;background-size:cover}}
@@ -17604,3 +18259,3130 @@ a.contact-info-v:hover{color:#005BBF}
 /* ================================================================
    RESPONSIVE INTERMEDIATE VIEWPORT FIXES - END
    ================================================================ */
+/* ================================================================
+   PHASE 1 - SIGNUP PASSWORD VISIBILITY TOGGLES
+   Scoped to the /signup password fields ONLY (.signup-password-*
+   + the two toggle ids). No other page, no global rule and no
+   prebuilt Tailwind utility is touched.
+
+   The wrapper is position:relative so the eye button can sit on
+   the right of its own input; the input keeps every existing
+   size/padding/min-height rule and only reserves room on the
+   right for the button (declared last so it wins the cascade at
+   equal specificity). State is carried by aria-pressed, so the
+   icon swap needs no JS class juggling.
+   ================================================================ */
+.signup-password-field {
+    position: relative;
+    display: block
+}
+.signup-password-field .input-light {
+    padding-right: 46px
+}
+.signup-password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #64748B;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: color 0.2s ease, background 0.2s ease
+}
+.signup-password-toggle:hover {
+    color: #0A192F;
+    background: rgba(10,25,47,0.05)
+}
+.signup-password-toggle:focus-visible {
+    outline: 2px solid #0A58FF;
+    outline-offset: 2px
+}
+.signup-password-toggle svg {
+    width: 20px;
+    height: 20px;
+    display: block
+}
+.signup-password-toggle .signup-password-icon-hide {
+    display: none
+}
+.signup-password-toggle[aria-pressed="true"] .signup-password-icon-show {
+    display: none
+}
+.signup-password-toggle[aria-pressed="true"] .signup-password-icon-hide {
+    display: block
+}
+@media (max-width:767.98px) {
+    .signup-password-field .input-light {
+        padding-right: 54px
+    }
+    .signup-password-toggle {
+        right: 6px;
+        width: 44px;
+        height: 44px
+    }
+    .signup-password-toggle svg {
+        width: 21px;
+        height: 21px
+    }
+}
+/* ================================================================
+   PHASE 2 - LOGIN PASSWORD VISIBILITY TOGGLE
+   Mirrors the /signup eye-button block above, scoped to the
+   /login password field ONLY (.login-password-* + the login
+   toggle id). No other page, no global rule and no prebuilt
+   Tailwind utility is touched.
+   ================================================================ */
+.login-password-field {
+    position: relative;
+    display: block
+}
+.login-password-field .input-light {
+    padding-right: 46px
+}
+.login-password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #64748B;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: color 0.2s ease, background 0.2s ease
+}
+.login-password-toggle:hover {
+    color: #0A192F;
+    background: rgba(10,25,47,0.05)
+}
+.login-password-toggle:focus-visible {
+    outline: 2px solid #0A58FF;
+    outline-offset: 2px
+}
+.login-password-toggle svg {
+    width: 20px;
+    height: 20px;
+    display: block
+}
+.login-password-toggle .login-password-icon-hide {
+    display: none
+}
+.login-password-toggle[aria-pressed="true"] .login-password-icon-show {
+    display: none
+}
+.login-password-toggle[aria-pressed="true"] .login-password-icon-hide {
+    display: block
+}
+@media (max-width:767.98px) {
+    .login-password-field .input-light {
+        padding-right: 54px
+    }
+    .login-password-toggle {
+        right: 6px;
+        width: 44px;
+        height: 44px
+    }
+    .login-password-toggle svg {
+        width: 21px;
+        height: 21px
+    }
+}
+/* PHASE 5B.1B — TRADE-IN IMAGE MANAGER
+   Namespaced styling for the Trade-In modal only. */
+#tradeInImagePreview.trade-in-image-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start
+}
+.trade-in-image-manager {
+    padding: 16px;
+    border: 1px solid #E2E8F0;
+    border-radius: 20px;
+    background: #FFFFFF;
+    box-shadow: 0 18px 45px rgba(15,23,42,0.07)
+}
+.trade-in-image-manager-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px
+}
+.trade-in-image-eyebrow {
+    margin: 0 0 6px;
+    color: #E48A2F;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .18em;
+    line-height: 1.2;
+    text-transform: uppercase
+}
+.trade-in-image-title {
+    margin: 0;
+    color: #08111F;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: -.03em;
+    line-height: 1.2
+}
+.trade-in-image-description {
+    max-width: 560px;
+    margin: 6px 0 0;
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.55
+}
+.trade-in-image-count-badge {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border: 1px solid rgba(228,138,47,.22);
+    border-radius: 999px;
+    background: rgba(228,138,47,.10);
+    color: #E48A2F;
+    font-size: 11px;
+    font-weight: 800;
+    white-space: nowrap
+}
+.trade-in-image-dropzone {
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px dashed #CBD5E1;
+    background: linear-gradient(180deg,#FBFCFD,#F6F8FB);
+    color: #08111F;
+    text-align: center;
+    transition: border-color .2s ease,background .2s ease,box-shadow .2s ease,transform .2s ease
+}
+.trade-in-image-dropzone:hover,
+.trade-in-image-dropzone:focus-visible,
+.trade-in-image-dropzone.hufa-dropzone--dragover {
+    border-color: #E48A2F;
+    background: #FFF7ED;
+    box-shadow: inset 0 0 0 1.5px rgba(228,138,47,.28)
+}
+.trade-in-image-dropzone:focus-visible {
+    outline: 3px solid rgba(228,138,47,.28);
+    outline-offset: 2px
+}
+.trade-in-image-dropzone.hufa-dropzone--dragover {
+    transform: translateY(-1px)
+}
+.trade-in-image-dropzone-title {
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.35
+}
+.trade-in-image-dropzone-copy {
+    margin-top: 5px;
+    color: #64748B;
+    font-size: 13px
+}
+.trade-in-image-dropzone-meta {
+    margin-top: 8px;
+    color: #94A3B8;
+    font-size: 11px
+}
+.trade-in-image-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px
+}
+.trade-in-image-count,
+.trade-in-image-remaining {
+    margin: 0;
+    color: #64748B;
+    font-size: 12px;
+    font-weight: 600
+}
+.trade-in-image-count {
+    display: inline-flex;
+    padding: 5px 10px;
+    border: 1px solid #E8ECF2;
+    border-radius: 999px;
+    background: #F4F6F9;
+    color: #163A70
+}
+.trade-in-image-limit-message {
+    margin: 10px 0 0;
+    padding: 9px 11px;
+    border: 1px solid #FDE8D2;
+    border-radius: 10px;
+    background: #FFF7ED;
+    color: #A65D18;
+    font-size: 12px;
+    font-weight: 700
+}
+.trade-in-image-dropzone.hidden,
+.trade-in-image-limit-message.hidden {
+    display: none !important
+}
+#tradeInImagePreview .trade-in-image-empty {
+    grid-column: 1 / -1;
+    padding: 30px 16px;
+    border: 1px dashed #CBD5E1;
+    border-radius: 14px;
+    background: #FBFCFD;
+    color: #64748B;
+    text-align: center
+}
+.trade-in-image-empty-title {
+    color: #334155;
+    font-size: 14px;
+    font-weight: 800
+}
+.trade-in-image-empty-copy {
+    margin-top: 5px;
+    font-size: 12px
+}
+#tradeInImagePreview .trade-in-image-slot {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #E2E8F0;
+    border-radius: 14px;
+    background: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(15,23,42,.05);
+    transition: border-color .2s ease,box-shadow .2s ease,transform .2s ease,opacity .2s ease
+}
+#tradeInImagePreview .trade-in-image-slot:hover,
+#tradeInImagePreview .trade-in-image-slot:focus-within {
+    border-color: #E48A2F;
+    box-shadow: 0 8px 20px rgba(15,23,42,.10)
+}
+#tradeInImagePreview .trade-in-image-frame {
+    position: relative;
+    overflow: hidden;
+    background: #F8FAFC
+}
+#tradeInImagePreview .trade-in-image-frame img {
+    display: block;
+    width: 100%;
+    height: 160px;
+    object-fit: cover;
+    transition: transform .25s ease
+}
+#tradeInImagePreview .trade-in-image-slot:hover .trade-in-image-frame img {
+    transform: scale(1.025)
+}
+.trade-in-image-position,
+.trade-in-image-cover {
+    position: absolute;
+    z-index: 2;
+    top: 8px;
+    display: inline-flex;
+    align-items: center;
+    pointer-events: none
+}
+.trade-in-image-position {
+    left: 8px;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(8,17,31,.86);
+    color: #FFFFFF;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1
+}
+.trade-in-image-cover {
+    left: 40px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: #E48A2F;
+    color: #08111F;
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .06em;
+    line-height: 1;
+    text-transform: uppercase
+}
+.trade-in-image-move {
+    position: absolute;
+    top: 50%;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid #E2E8F0;
+    border-radius: 999px;
+    background: rgba(255,255,255,.96);
+    box-shadow: 0 1px 4px rgba(15,23,42,.12);
+    color: #08111F;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    transform: translateY(-50%);
+    transition: background-color .2s ease,border-color .2s ease,color .2s ease
+}
+.trade-in-image-move:hover,
+.trade-in-image-move:focus-visible {
+    border-color: #E48A2F;
+    background: #E48A2F;
+    color: #FFFFFF;
+    outline: none
+}
+.trade-in-image-move-left { left: 8px }
+.trade-in-image-move-right { right: 8px }
+#tradeInImagePreview .trade-in-image-cover-static { pointer-events: none }
+#tradeInImagePreview .trade-in-image-slot[draggable="true"] { cursor: grab }
+#tradeInImagePreview .trade-in-image-slot--dragging {
+    opacity: .45;
+    cursor: grabbing
+}
+#tradeInImagePreview .trade-in-image-slot--drop-target {
+    border-color: #E48A2F;
+    box-shadow: 0 0 0 2px rgba(228,138,47,.45)
+}
+#tradeInImagePreview .btn {
+    border-radius: 8px;
+    font-size: 12px
+}
+@media (min-width:768px) {
+    #tradeInImagePreview.trade-in-image-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr))
+    }
+}
+@media (max-width:640px) {
+    .trade-in-image-manager {
+        padding: 13px;
+        border-radius: 16px
+    }
+    .trade-in-image-manager-header {
+        flex-direction: column;
+        gap: 10px
+    }
+    .trade-in-image-count-badge { align-self: flex-start }
+    #tradeInImagePreview.trade-in-image-grid { gap: 10px }
+    #tradeInImagePreview .trade-in-image-frame img { height: 132px }
+    .trade-in-image-move {
+        width: 32px;
+        height: 32px
+    }
+    .trade-in-image-cover { left: 42px }
+    .trade-in-image-status-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 7px
+    }
+}
+
+/* ============================================
+   PHASE 5B.1I - Trade-In Features parity
+   --------------------------------------------
+   The Trade-In Features picker is generated with the SAME class
+   names and markup as Upload Vehicle's picker (.hufa-feature-nav,
+   .hufa-feature-tab, .hufa-tab-active, .hufa-feature,
+   .hufa-feature-selected, .hufa-chip-selected). Upload's rules for
+   those classes are scoped to ".hufa-form #featureChips /
+   .hufa-form #selectedFeatureChips" - and the Trade-In modal is
+   NOT inside .hufa-form - so the identical structural rules are
+   mirrored here, scoped to the Trade-In ids. Additive only:
+   nothing above is modified and Upload Vehicle is untouched.
+   ============================================ */
+#tradeInFeatureChips .hufa-tab-active,
+#tradeInFeatureChips .hufa-tab {
+    border-radius: 10px
+}
+#tradeInFeatureChips .hufa-feature,
+#tradeInFeatureChips .hufa-feature-selected {
+    border-radius: 10px
+}
+#tradeInFeatureChips .hufa-feature-nav {
+    min-width: 0;
+    scrollbar-width: thin;
+    scrollbar-color: #CBD5E1 transparent;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scroll-padding-inline: 4px
+}
+#tradeInFeatureChips .hufa-feature-nav::-webkit-scrollbar {
+    height: 6px
+}
+#tradeInFeatureChips .hufa-feature-nav::-webkit-scrollbar-track {
+    background: transparent
+}
+#tradeInFeatureChips .hufa-feature-nav::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 999px
+}
+#tradeInFeatureChips .hufa-feature-nav:hover::-webkit-scrollbar-thumb {
+    background: #94A3B8
+}
+#tradeInFeatureChips .hufa-feature-tab {
+    flex-shrink: 0;
+    min-width: -moz-fit-content;
+    min-width: fit-content;
+    line-height: 1.25;
+    -webkit-tap-highlight-color: transparent
+}
+#tradeInSelectedFeatureChips .hufa-chip-selected {
+    border-radius: 999px
+}
+#tradeInSelectedFeatureChips.hidden {
+    display: none !important
+}
+@media (min-width:1280px) {
+    /* Upload parity: .hufa-form .card .grid widens the feature grid
+       gaps on large screens. */
+    #tradeInFeatureChips .grid {
+        column-gap: 24px;
+        row-gap: 20px
+    }
+}
+@media (max-width:640px) {
+    #tradeInFeatureChips .hufa-feature-nav {
+        scrollbar-width: none
+    }
+    #tradeInFeatureChips .hufa-feature-nav::-webkit-scrollbar {
+        display: none
+    }
+    #tradeInFeatureChips .hufa-feature-tab {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        font-size: 13px
+    }
+}
+@media (max-width:767.98px) {
+    /* Upload parity: on phones the category tabs become a stacked,
+       full-width list, the button grid collapses to one column with
+       a 14px gap (.hufa-form .card .grid) and touch targets grow. */
+    #tradeInFeatureChips .hufa-feature-nav {
+        display: flex;
+        flex-direction: column;
+        flex-wrap: nowrap;
+        align-items: stretch;
+        gap: 8px;
+        overflow: visible;
+        overflow-x: visible;
+        width: 100%;
+        padding: 10px;
+        background: #E2E8F0;
+        border: 1px solid #E2E8F0;
+        border-bottom: 1px solid #CBD5E1;
+        border-radius: 12px;
+        margin-top: 2px;
+        margin-bottom: 14px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none
+    }
+    #tradeInFeatureChips .hufa-feature-nav::-webkit-scrollbar {
+        display: none
+    }
+    #tradeInFeatureChips .hufa-feature-nav .hufa-feature-tab {
+        flex: 0 0 auto;
+        width: 100%;
+        min-height: 46px;
+        text-align: center;
+        white-space: nowrap;
+        font-weight: 600;
+        justify-content: center;
+        box-shadow: none
+    }
+    #tradeInFeatureChips .hufa-feature-nav .hufa-tab {
+        background: #FFFFFF;
+        border: 1px solid #CBD5E1;
+        color: #334155
+    }
+    #tradeInFeatureChips .hufa-feature {
+        font-weight: 500
+    }
+    #tradeInFeatureChips .hufa-feature-selected {
+        font-weight: 600
+    }
+    #tradeInFeatureChips .grid {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 14px !important
+    }
+    #tradeInFeatureChips .hufa-feature,
+    #tradeInFeatureChips .hufa-feature-selected,
+    #tradeInSelectedFeatureChips .hufa-chip-selected {
+        min-height: 40px;
+        font-size: 13.5px
+    }
+    #tradeInFeatureSearch {
+        font-size: 16px;
+        line-height: 1.4
+    }
+}
+
+/* ============================================
+   PHASE 5B.1K - Trade-In Condition & History UI
+   --------------------------------------------
+   Visual layer ONLY for the three card groups inside the Trade-In
+   modal (Vehicle Condition / Accident History / Service History).
+   The markup keeps every existing id, hidden input, data-* value and
+   onclick handler; only the presentation changed.
+
+   Scoped to the Trade-In modal (#tradeInModalOverlay) AND to the
+   trade-choice-* classes, so nothing outside the Trade-In Centre is
+   affected. Card metrics mirror the form's own .input-light controls
+   (1px #E5E7EB border, 12px radius, 14px text) and the selected state
+   mirrors .input-light:focus (orange border + soft warm glow).
+
+   Upload Vehicle is the visual reference only - it is not touched.
+   ============================================ */
+
+/* Group label - same metrics as the Vehicle Details field labels
+   (block text-sm font-semibold text-slate-700 mb-2). */
+#tradeInModalOverlay .trade-choice-label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: #334155;
+    margin-bottom: 8px
+}
+
+/* Helper line - same metrics as the Vehicle Details helper lines
+   (text-xs text-slate-500 mt-2). */
+#tradeInModalOverlay .trade-choice-help {
+    margin: 8px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #64748B
+}
+
+/* Option grid - 2 up on phones (compact, symmetric 2x2), 4 up from
+   768px so all four choices of a full-width group can be compared in
+   one glance without scrolling. */
+#tradeInModalOverlay .trade-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px
+}
+@media (min-width:640px) {
+    #tradeInModalOverlay .trade-choice-grid {
+        gap: 16px
+    }
+}
+@media (min-width:768px) {
+    #tradeInModalOverlay .trade-choice-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr))
+    }
+}
+/* Vehicle Condition lives in the half-width Vehicle Details column, so
+   it keeps two columns at every width - its cards stay the same size
+   as the cards of the two full-width groups. */
+#tradeInModalOverlay #tradeInConditionCards {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+}
+
+/* Choice card - mirrors the .input-light surface used by every Vehicle
+   Details field, with a comfortable touch target on phones. */
+#tradeInModalOverlay .trade-choice-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    min-height: 88px;
+    padding: 12px 13px;
+    background: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    text-align: left;
+    cursor: pointer;
+    color: #0A192F;
+    transition: border-color .18s ease, background-color .18s ease, box-shadow .18s ease;
+    -webkit-tap-highlight-color: transparent
+}
+#tradeInModalOverlay .trade-choice-card:hover {
+    border-color: #E48A2F;
+    background: #FFFBF4
+}
+#tradeInModalOverlay .trade-choice-card:focus-visible {
+    outline: none;
+    border-color: #E48A2F;
+    box-shadow: 0 0 0 2px rgba(182,147,92,.15)
+}
+
+/* Selected state. The existing selectTradeInCondition /
+   selectTradeInAccident / selectTradeInService handlers, the draft
+   restore and the EDIT restore still mark the chosen card with the
+   existing highlight classes - these rules only re-skin that mark,
+   keyed on the existing "ring-2" class and 2 classes of specificity,
+   so the cosmetic values win over the utilities and the 3px border
+   utility can no longer shift the card. Handlers, values, draft
+   persistence and submission are untouched. */
+#tradeInModalOverlay .trade-choice-card.ring-2 {
+    background: #FFF7E8;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #E48A2F;
+    box-shadow: 0 0 0 2px rgba(182,147,92,.18), 0 10px 18px -14px rgba(228,138,47,.55)
+}
+
+/* Card text - title 14px/700 (#08111F) and description 12px/500
+   (#64748B), matching the form's label/helper typography. The title
+   reserves room for the badge so the two can never overlap. */
+#tradeInModalOverlay .trade-choice-title {
+    display: block;
+    width: 100%;
+    padding-right: 22px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    color: #08111F;
+    overflow-wrap: anywhere
+}
+#tradeInModalOverlay .trade-choice-desc {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: #64748B
+}
+
+/* Selection badge - pure CSS tick (no icon-font dependency, so the
+   Material Symbols subset in index.html needs no change). */
+#tradeInModalOverlay .trade-choice-check {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #FFFFFF;
+    border: 1px solid #D8DFE8;
+    border-radius: 999px;
+    pointer-events: none;
+    transition: background-color .18s ease, border-color .18s ease
+}
+#tradeInModalOverlay .trade-choice-check::after {
+    content: "";
+    width: 4px;
+    height: 8px;
+    margin-top: -2px;
+    border-right: 2px solid #FFFFFF;
+    border-bottom: 2px solid #FFFFFF;
+    transform: rotate(45deg);
+    opacity: 0;
+    transition: opacity .18s ease
+}
+#tradeInModalOverlay .trade-choice-card.ring-2 .trade-choice-check {
+    background: #E48A2F;
+    border-color: #E48A2F
+}
+#tradeInModalOverlay .trade-choice-card.ring-2 .trade-choice-check::after {
+    opacity: 1
+}
+
+/* Roomier cards once the modal is wide. */
+@media (min-width:640px) {
+    #tradeInModalOverlay .trade-choice-card {
+        min-height: 92px;
+        padding: 13px 14px
+    }
+}
+/* Phones: tighter padding + a smaller badge so the longest label
+   ("Excellent") still fits beside it on a 320px screen. */
+@media (max-width:480px) {
+    #tradeInModalOverlay .trade-choice-card {
+        min-height: 84px;
+        padding: 11px 10px
+    }
+    #tradeInModalOverlay .trade-choice-title {
+        padding-right: 20px;
+        font-size: 13.5px
+    }
+    #tradeInModalOverlay .trade-choice-desc {
+        font-size: 11.5px
+    }
+    #tradeInModalOverlay .trade-choice-check {
+        top: 8px;
+        right: 8px;
+        width: 16px;
+        height: 16px
+    }
+}
+
+
+/* ============================================
+   PHASE 5B.1L - Trade-In Information UI
+   --------------------------------------------
+   Visual layer ONLY for the free-text notes group inside the Trade-In
+   modal ("Vehicle Information" - Modifications / Mechanical Issues /
+   Extras / Trade Preferences).
+
+   Every existing id, placeholder, value, event binding, draft key and
+   submission field is UNCHANGED; only the presentation changed.
+
+   Scoped to the Trade-In modal (#tradeInModalOverlay) AND to the
+   trade-in-info-* classes, so nothing outside the Trade-In Centre is
+   affected and no global rule is touched. The section card mirrors the
+   polished Vehicle Photos manager (.trade-in-image-manager) and the
+   controls reuse the form's own .input-light surface, so this section
+   now matches Vehicle Details and Condition & History.
+
+   Upload Vehicle is the visual reference only - it is not modified.
+   ============================================ */
+
+#tradeInModalOverlay .trade-in-info-panel {
+    padding: 16px;
+    border: 1px solid #E2E8F0;
+    border-radius: 20px;
+    background: #FFFFFF;
+    box-shadow: 0 18px 45px rgba(15,23,42,0.07)
+}
+
+/* Heading block - the same eyebrow / title / subtitle metrics as the
+   Vehicle Photos manager, so both cards read as one family. */
+#tradeInModalOverlay .trade-in-info-head {
+    margin-bottom: 16px
+}
+#tradeInModalOverlay .trade-in-info-eyebrow {
+    margin: 0 0 6px;
+    color: #E48A2F;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .18em;
+    line-height: 1.2;
+    text-transform: uppercase
+}
+#tradeInModalOverlay .trade-in-info-title {
+    margin: 0;
+    color: #08111F;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: -.03em;
+    line-height: 1.2
+}
+#tradeInModalOverlay .trade-in-info-subtitle {
+    max-width: 560px;
+    margin: 6px 0 0;
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.55
+}
+
+/* Logical sub-groups (Condition Notes / Additional Information) - a
+   hairline dashed divider separates the two without adding weight. */
+#tradeInModalOverlay .trade-in-info-group + .trade-in-info-group {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed #E2E8F0
+}
+#tradeInModalOverlay .trade-in-info-group-label {
+    margin: 0 0 10px;
+    color: #64748B;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .14em;
+    line-height: 1.2;
+    text-transform: uppercase
+}
+
+/* Field grid - one column on phones, two from 768px up (the same 16px
+   rhythm as the Vehicle Details grid). */
+#tradeInModalOverlay .trade-in-info-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    align-items: start
+}
+@media (min-width:768px) {
+    #tradeInModalOverlay .trade-in-info-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+    }
+}
+/* min-width:0 keeps each textarea inside its grid track on every width
+   (the same stretch guard the Registration Number field needs). */
+#tradeInModalOverlay .trade-in-info-field {
+    display: flex;
+    flex-direction: column;
+    min-width: 0
+}
+
+/* Field label row + its Optional tag. Label metrics match
+   .trade-choice-label and the Vehicle Details labels (14px/600 #334155). */
+#tradeInModalOverlay .trade-in-info-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: #334155;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3
+}
+#tradeInModalOverlay .trade-in-info-label-text {
+    min-width: 0
+}
+#tradeInModalOverlay .trade-in-info-optional {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border: 1px solid #E8ECF2;
+    border-radius: 999px;
+    background: #F4F6F9;
+    color: #64748B;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    line-height: 1.4;
+    text-transform: uppercase;
+    white-space: nowrap
+}
+
+/* Textareas now use the form's shared .input-light surface (1px #E5E7EB,
+   12px radius, #F9FAFB fill, orange focus) so they match every Vehicle
+   Details control; only the writing area + resize behaviour are set here. */
+#tradeInModalOverlay textarea.input-light.trade-in-info-textarea {
+    display: block;
+    min-height: 100px;
+    line-height: 1.6;
+    resize: vertical
+}
+
+/* Helper line - the same metrics as .trade-choice-help and the Vehicle
+   Details helper lines (12px #64748B). */
+#tradeInModalOverlay .trade-in-info-help {
+    margin: 8px 0 0;
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.45
+}
+
+/* Phones: tighter card padding and a slightly taller writing area, so
+   the section stays compact but stays comfortable to type in. */
+@media (max-width:640px) {
+    #tradeInModalOverlay .trade-in-info-panel {
+        padding: 14px;
+        border-radius: 16px
+    }
+    #tradeInModalOverlay .trade-in-info-title {
+        font-size: 18px
+    }
+    #tradeInModalOverlay .trade-in-info-subtitle {
+        font-size: 11.5px
+    }
+    #tradeInModalOverlay textarea.input-light.trade-in-info-textarea {
+        min-height: 112px
+    }
+}
+
+/* Very narrow phones (320px): the Optional tag must never squeeze the
+   label text out of its row. */
+@media (max-width:400px) {
+    #tradeInModalOverlay .trade-in-info-label {
+        gap: 6px
+    }
+    #tradeInModalOverlay .trade-in-info-optional {
+        padding: 2px 6px;
+        font-size: 10px
+    }
+}
+
+/* ============================================
+   PHASE 5B.1M - Trade-In full-page workspace
+   --------------------------------------------
+   PRESENTATION CONTAINER ONLY. The Trade-In NEW/EDIT form is a full
+   dashboard page now: it renders inside the dashboard main area
+   (#dashboardView) and reuses the dashboard shell that is already on
+   screen - the same sidebar, the same mobile burger button
+   (toggleDashboardSidebar) and the same page width, spacing and
+   page-level loading state as the Upload Vehicle / Add Vehicle page.
+   It is no longer a fixed, centred popup.
+
+   The container keeps the EXISTING #tradeInModalOverlay id, so every
+   #tradeInModalOverlay-scoped rule above (Vehicle Photos, Condition &
+   History choice cards, Features, Vehicle Information, Registration,
+   Vehicle Details) keeps applying unchanged - that id is now the
+   form's page container, not a modal overlay.
+
+   Additive and scoped to this container ONLY: nothing above is
+   modified, no global rule is touched and no other page is affected.
+   ============================================ */
+
+/* Normalize any leftover modal geometry (the element is a normal page
+   container in the dashboard main area now: static flow, full width,
+   no overlay backdrop, no stacking context). */
+#tradeInModalOverlay.trade-in-workspace {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    display: block;
+    width: 100%;
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none
+}
+
+/* Page surface - the same white card the form always used, now full
+   width and part of the normal page scroll (no max-height and no
+   inner scroller), exactly like the Add Vehicle page sections. */
+#tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface {
+    max-width: 100%;
+    max-height: none;
+    overflow: visible
+}
+
+/* Phones: tighter surface padding + radius (same treatment as the
+   Vehicle Photos manager and the Vehicle Information panel above). */
+@media (max-width:640px) {
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface {
+        padding: 14px;
+        border-radius: 18px
+    }
+}
+
+/* ============================================
+   PHASE 5B.1N - Trade-In Review & Submission
+   --------------------------------------------
+   PRESENTATION ONLY. The pre-submit summary is one full-width section
+   made of seven group cards (Vehicle Summary, Photos, Details,
+   Condition & History, Selected Features, Vehicle Information, Selected
+   Dealerships), a request-completeness indicator and a submission bar
+   that states what is still required.
+
+   Scoped to the existing #tradeInModalOverlay container and to the
+   trade-in-review-* / trade-in-submit-* / trade-in-dealerships-* classes
+   only: no rule above is modified and no other page or section is
+   affected. Every value shown is a read-only projection of the EXISTING
+   fields, rendered by refreshTradeInReviewPanel().
+   ============================================ */
+
+/* Section card - the same surface family as the Vehicle Information
+   panel and the Vehicle Photos manager. */
+#tradeInModalOverlay .trade-in-review-panel {
+    min-width: 0;
+    margin-top: 20px;
+    padding: 16px;
+    border: 1px solid #E5E7EB;
+    border-radius: 18px;
+    background: #FFFFFF;
+    box-sizing: border-box;
+    overflow-x: hidden
+}
+
+/* Heading block - the same eyebrow / title / subtitle metrics as the
+   Vehicle Information panel, so both sections read as one family. */
+#tradeInModalOverlay .trade-in-review-head {
+    margin-bottom: 16px
+}
+#tradeInModalOverlay .trade-in-review-eyebrow {
+    margin: 0 0 6px;
+    color: #E48A2F;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .18em;
+    line-height: 1.2;
+    text-transform: uppercase
+}
+#tradeInModalOverlay .trade-in-review-title {
+    margin: 0;
+    color: #08111F;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: -.03em;
+    line-height: 1.2
+}
+#tradeInModalOverlay .trade-in-review-subtitle {
+    max-width: 560px;
+    margin: 6px 0 0;
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.55
+}
+
+/* Request completeness - one bar the section is read from: amber while
+   something required is missing, green once the request is ready. */
+#tradeInModalOverlay .trade-in-review-progress {
+    padding: 12px 14px;
+    border: 1px solid #E8ECF2;
+    border-radius: 14px;
+    background: #F9FAFB
+}
+#tradeInModalOverlay .trade-in-review-progress-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-bottom: 8px
+}
+#tradeInModalOverlay .trade-in-review-progress-label {
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700
+}
+#tradeInModalOverlay .trade-in-review-progress-value {
+    color: #08111F;
+    font-size: 12px;
+    font-weight: 800
+}
+#tradeInModalOverlay .trade-in-review-progress-track {
+    position: relative;
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #E2E8F0;
+    overflow: hidden
+}
+#tradeInModalOverlay .trade-in-review-progress-fill {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(135deg,#E48A2F,#F0A94E);
+    transition: width .3s ease
+}
+#tradeInModalOverlay .trade-in-review-progress-hint {
+    margin: 8px 0 0;
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.45
+}
+#tradeInModalOverlay .trade-in-review-panel[data-complete="true"] .trade-in-review-progress-fill {
+    background: linear-gradient(135deg,#0F9D58,#34C08A)
+}
+#tradeInModalOverlay .trade-in-review-panel[data-complete="true"] .trade-in-review-progress-hint {
+    color: #0F7B46;
+    font-weight: 600
+}
+
+/* The seven group cards - one column on phones, two from 900px up, so
+   the whole review fits in a couple of screens with no horizontal
+   scroll anywhere. */
+#tradeInModalOverlay .trade-in-review-groups {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 16px
+}
+@media (min-width:900px) {
+    #tradeInModalOverlay .trade-in-review-groups {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+    }
+    /* The two long groups read better full width. */
+    #tradeInModalOverlay .trade-in-review-group[data-review-group="condition"],
+    #tradeInModalOverlay .trade-in-review-group[data-review-group="info"] {
+        grid-column: 1 / -1
+    }
+}
+
+/* Group card - min-width:0 keeps every card inside its grid track at
+   every width. */
+#tradeInModalOverlay .trade-in-review-group {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 12px 13px;
+    border: 1px solid #E8ECF2;
+    border-radius: 14px;
+    background: #FFFFFF
+}
+#tradeInModalOverlay .trade-in-review-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 10px;
+    margin-bottom: 10px
+}
+#tradeInModalOverlay .trade-in-review-group-title {
+    margin: 0;
+    color: #08111F;
+    font-size: 13.5px;
+    font-weight: 800;
+    letter-spacing: .01em;
+    line-height: 1.25
+}
+
+/* Completeness pill: amber = still required, green = complete,
+   neutral = optional section. */
+#tradeInModalOverlay .trade-in-review-status {
+    flex: 0 0 auto;
+    padding: 3px 9px;
+    border: 1px solid #E2E8F0;
+    border-radius: 999px;
+    background: #F4F6F9;
+    color: #64748B;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    line-height: 1.4;
+    text-transform: uppercase;
+    white-space: nowrap
+}
+#tradeInModalOverlay .trade-in-review-status[data-state="pending"] {
+    border-color: #F4D8B4;
+    background: #FDF3E4;
+    color: #9A5B12
+}
+#tradeInModalOverlay .trade-in-review-status[data-state="complete"] {
+    border-color: #BFE8D3;
+    background: #EAF7F0;
+    color: #0F7B46
+}
+#tradeInModalOverlay .trade-in-review-status[data-state="optional"] {
+    border-color: #E2E8F0;
+    background: #F4F6F9;
+    color: #64748B
+}
+
+/* Read-only value rows - label left, value right, wrapping instead of
+   scrolling (overflow-wrap so a long registration or note can never
+   push the card wider than its track). */
+#tradeInModalOverlay .trade-in-review-rows {
+    margin: 0
+}
+#tradeInModalOverlay .trade-in-review-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px dashed #EEF2F7
+}
+#tradeInModalOverlay .trade-in-review-row:last-child {
+    padding-bottom: 0;
+    border-bottom: 0
+}
+#tradeInModalOverlay .trade-in-review-row dt {
+    flex: 0 0 auto;
+    max-width: 48%;
+    color: #64748B;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.45
+}
+#tradeInModalOverlay .trade-in-review-row dd {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    color: #08111F;
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.45;
+    text-align: right;
+    overflow-wrap: anywhere
+}
+#tradeInModalOverlay .trade-in-review-row dd .is-empty {
+    color: #94A3B8;
+    font-weight: 600
+}
+
+/* Long free-text rows (features list, the four notes, dealerships)
+   stack the label above the value and read left aligned. */
+#tradeInModalOverlay .trade-in-review-row-block {
+    display: block
+}
+#tradeInModalOverlay .trade-in-review-row-block dt {
+    max-width: none;
+    margin-bottom: 4px
+}
+#tradeInModalOverlay .trade-in-review-row-block dd {
+    text-align: left
+}
+#tradeInModalOverlay .trade-in-review-note {
+    color: #334155;
+    font-weight: 600;
+    overflow-wrap: anywhere
+}
+#tradeInModalOverlay .trade-in-review-note.is-empty {
+    color: #94A3B8
+}
+#tradeInModalOverlay .trade-in-review-group-foot {
+    margin: 10px 0 0;
+    color: #94A3B8;
+    font-size: 11.5px;
+    line-height: 1.45
+}
+
+/* The Select Dealerships group's own note (that group holds no controls
+   - the review card it used to contain is now this section). */
+#tradeInModalOverlay .trade-in-dealerships-note {
+    margin: 0;
+    color: #94A3B8;
+    font-size: 12px;
+    line-height: 1.5
+}
+
+/* ============================================
+   Submission area - request readiness on the left and the three
+   EXISTING actions (Clear Now / Cancel / Submit) on the right; the
+   whole bar stacks full width on phones.
+   ============================================ */
+#tradeInModalOverlay .trade-in-submit-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px 18px;
+    min-width: 0;
+    margin-top: 20px;
+    padding: 14px;
+    border: 1px solid #E8ECF2;
+    border-radius: 16px;
+    background: #F9FAFB;
+    box-sizing: border-box
+}
+#tradeInModalOverlay .trade-in-submit-status {
+    flex: 1 1 260px;
+    min-width: 0
+}
+#tradeInModalOverlay .trade-in-submit-status-head {
+    display: flex;
+    align-items: center;
+    gap: 8px
+}
+#tradeInModalOverlay .trade-in-submit-status-icon {
+    color: #E48A2F;
+    font-size: 18px;
+    line-height: 1
+}
+#tradeInModalOverlay .trade-in-submit-readiness {
+    color: #08111F;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.35
+}
+#tradeInModalOverlay .trade-in-submit-note {
+    margin: 6px 0 0;
+    color: #64748B;
+    font-size: 11.5px;
+    line-height: 1.5
+}
+#tradeInModalOverlay .trade-in-submit-live {
+    margin: 6px 0 0;
+    color: #9A5B12;
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 1.45
+}
+#tradeInModalOverlay .trade-in-submit-live:empty {
+    display: none
+}
+#tradeInModalOverlay .trade-in-submit-bar.is-ready .trade-in-submit-status-icon,
+#tradeInModalOverlay .trade-in-submit-bar.is-ready .trade-in-submit-readiness {
+    color: #0F7B46
+}
+
+/* Actions - same three buttons, same order, same handlers. */
+#tradeInModalOverlay .trade-in-submit-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    min-width: 0
+}
+#tradeInModalOverlay .trade-in-submit-actions > button {
+    min-height: 44px;
+    white-space: nowrap
+}
+#tradeInModalOverlay .trade-in-submit-clear {
+    padding: 12px 22px;
+    border: 1px solid #E48A2F;
+    border-radius: 12px;
+    background: #E48A2F;
+    color: #08111F;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    cursor: pointer;
+    transition: transform .25s ease, box-shadow .25s ease
+}
+#tradeInModalOverlay .trade-in-submit-clear:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 18px 40px rgba(228,138,47,0.35)
+}
+#tradeInModalOverlay .trade-in-submit-secondary {
+    flex: 0 0 auto
+}
+#tradeInModalOverlay .trade-in-submit-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer
+}
+#tradeInModalOverlay .trade-in-submit-primary[disabled] {
+    cursor: progress;
+    opacity: .82;
+    transform: none;
+    box-shadow: 0 6px 18px rgba(228,138,47,0.18)
+}
+#tradeInModalOverlay .trade-in-submit-label {
+    display: inline-block
+}
+
+/* Loading state - painted only while the existing submit promise is in
+   flight (the button is disabled and aria-busy in the same pass, so a
+   double submit is impossible). */
+#tradeInModalOverlay .trade-in-submit-spinner {
+    display: none;
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    border-radius: 999px;
+    border: 2px solid rgba(8,17,31,.25);
+    border-top-color: #08111F;
+    animation: tradeInSubmitSpin .7s linear infinite
+}
+#tradeInModalOverlay .trade-in-submit-primary.is-busy .trade-in-submit-spinner {
+    display: inline-block
+}
+@keyframes tradeInSubmitSpin {
+    to {
+        transform: rotate(360deg)
+    }
+}
+
+/* Phones: the bar stacks, the status sits on its own row and the three
+   actions become full-width touch targets (Submit stays last - it is
+   the final step). Nothing can overflow horizontally. */
+@media (max-width:640px) {
+    #tradeInModalOverlay .trade-in-review-panel {
+        padding: 13px;
+        border-radius: 16px
+    }
+    #tradeInModalOverlay .trade-in-review-title {
+        font-size: 18px
+    }
+    #tradeInModalOverlay .trade-in-submit-bar {
+        padding: 13px;
+        border-radius: 15px
+    }
+    #tradeInModalOverlay .trade-in-submit-status {
+        flex: 1 1 100%
+    }
+    #tradeInModalOverlay .trade-in-submit-actions {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%
+    }
+    #tradeInModalOverlay .trade-in-submit-actions > button {
+        width: 100%
+    }
+}
+
+/* Very narrow phones (320px): keep the label/value rows readable
+   without letting either side push the card wider than the screen. */
+@media (max-width:400px) {
+    #tradeInModalOverlay .trade-in-review-row dt {
+        max-width: 45%;
+        font-size: 11.5px
+    }
+    #tradeInModalOverlay .trade-in-review-row dd {
+        font-size: 12px
+    }
+}
+/* ============================================
+   PHASE 5B.1O - Trade-In workspace layout & responsive polish
+   --------------------------------------------
+   LAYOUT / VISUAL ONLY. No element, id, field, value, option, handler,
+   draft key, validation rule or payload is involved, no rule above is
+   modified and every rule below is new and scoped to the existing
+   #tradeInModalOverlay trade-in workspace container - no global style,
+   no other page and no other section is affected.
+
+   Goal: put the full-page Trade-In workspace on the SAME page rhythm and
+   the SAME phone field sizing as the reference page it mirrors, the
+   Upload Vehicle / Add Vehicle page (PHASE 5B.1M).
+   ============================================ */
+
+/* 1. PAGE SPACING - the workspace container carries the shared
+   "space-y-8" utility, but it is deliberately NOT a ".hufa-form" (the
+   Trade-In form is a .trade-in-workspace - see PHASE 5B.1I), so nothing
+   overrides that utility's 32px stack gap the way
+   ".hufa-form.space-y-8 > * + *" overrides it on the Add Vehicle page.
+   The result was a 32px void between the shared page heading and the
+   workspace surface at every width, where the reference page shows the
+   heading's own margin instead (22px desktop / 20px on phones).
+   Neutralising the stack gap lets that same heading margin define the
+   distance, so the Trade-In page now spaces its page heading exactly
+   like the reference page. */
+#tradeInModalOverlay.trade-in-workspace.space-y-8 > * + * {
+    margin-top: 0
+}
+
+/* 2. SECTION RHYTHM - the surface stacks its sections with utilities
+   (mt-4 = 16px on Accident History / Service History / Features /
+   Vehicle Information, mt-6 = 24px on Select Dealerships) while Vehicle
+   Summary, Vehicle Photos, the Review panel and the Submission bar all
+   use 20px (.mb-5 here, margin-top:20px in the phase rules above). This
+   one rule gives every directly stacked section of the surface the same
+   20px the reference page applies to its cards, so the whole form reads
+   on a single rhythm. Sibling margins collapse with the sections' own
+   bottom margins, so Vehicle Summary and Vehicle Photos keep exactly the
+   spacing they had and the Submission bar keeps its 20px. */
+#tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > div + div {
+    margin-top: 20px
+}
+
+/* 3. PHONES - field sizing parity with the reference page. Below 768px
+   the Add Vehicle page raises .input-light to 16px with a 48px minimum
+   height (".hufa-form .input-light" in the phone block above); the
+   Trade-In workspace kept the base 14px, which left its fields smaller
+   and shorter than the reference's and re-triggered iOS Safari's focus
+   auto-zoom on every field (the Trade-In Features search box already had
+   this 16px treatment on its own). Scoped to the workspace's own
+   .input-light controls only. */
+@media (max-width:767.98px) {
+    #tradeInModalOverlay.trade-in-workspace .input-light {
+        font-size: 16px;
+        line-height: 1.4
+    }
+}
+
+
+/* 4. FIELD GRID RHYTHM - the Vehicle Details grid (the two-column field
+   grid that is a direct child of the surface) and the Vehicle
+   Information field grid both keep the utilities' 16px gap at every
+   width, while the reference page drives its own field grids through
+   ".hufa-form .card .grid": 14px below 768px (both pages are a single
+   column there), 24px column / 18px row between 768px and 1279px and
+   24px column / 20px row from 1280px. Left at 16px, the Trade-In Make /
+   Model / Variant / Year / Mileage / Registration fields sat visibly
+   tighter than the identical fields on the Add Vehicle page - the
+   two-column sections at tablet and desktop widths were the clearest
+   mismatch. Scoped to the workspace's two field grids only: the
+   Condition, Accident History and Service History choice grids keep
+   their own 12px / 16px card rhythm (PHASE 5B.1K), and no utility or
+   global rule is touched. */
+@media (max-width:767.98px) {
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .grid.md\:grid-cols-2,
+    #tradeInModalOverlay.trade-in-workspace .trade-in-info-grid {
+        gap: 14px
+    }
+}
+@media (min-width:768px) and (max-width:1279.98px) {
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .grid.md\:grid-cols-2,
+    #tradeInModalOverlay.trade-in-workspace .trade-in-info-grid {
+        column-gap: 24px;
+        row-gap: 18px
+    }
+}
+@media (min-width:1280px) {
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .grid.md\:grid-cols-2,
+    #tradeInModalOverlay.trade-in-workspace .trade-in-info-grid {
+        column-gap: 24px;
+        row-gap: 20px
+    }
+}
+
+/* 5. CONTENT WIDTH - the reference page widens its own container from
+   1280px up (".container-main.hufa-form" -> 1360px), while the
+   workspace kept the shared max-w-6xl (1152px), so on wide desktops
+   the Trade-In form was 208px narrower than the Add Vehicle page it
+   mirrors. Same scoped container, same breakpoint, same value as the
+   reference. This rule can never overflow a screen: a block element
+   never grows past its containing block, so narrower viewports keep
+   exactly the width they have today. */
+@media (min-width:1280px) {
+    #tradeInModalOverlay.trade-in-workspace.container-main {
+        max-width: 1360px
+    }
+}
+
+/* 6. PHONES - image manager slot footer. The dashboard-wide button rule
+   ("@media (max-width:1279.98px) .btn" further up this file) forces
+   white-space:nowrap, 16px horizontal padding and a 44px minimum
+   height, so the Replace / Remove pair could not shrink into the
+   two-column action row of a 110-145px wide slot on phones and its
+   labels were clipped by the slot's overflow. Below 640px the pair
+   stacks in its own single-column row - the slot grid itself stays
+   two-up, exactly like the reference page's #preview grid - and the
+   buttons take the same compact phone metric the reference applies to
+   its own image manager (".hufa-form #preview .btn": 38px minimum
+   height, 13px label). Slot proportions, ids, handlers and label text
+   are all unchanged. */
+@media (max-width:640px) {
+    #tradeInImagePreview .trade-in-image-slot > .grid {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px
+    }
+    #tradeInImagePreview .btn {
+        min-height: 38px;
+        font-size: 13px;
+        /* The dashboard-wide phone .btn keeps 16px side padding; a
+           98px slot only offers 78px of action-row width at 320px, so
+           10px sides let the 13px label fit without clipping. */
+        padding-left: 10px;
+        padding-right: 10px
+    }
+}
+
+/* 7. PHONES - surface title row. The form heading and the Close button
+   share a justify-between flex row with no gap, so on a 320px screen
+   the two touched; the heading may now wrap (min-width:0) while Close
+   keeps its own size (flex:0 0 auto) instead of competing for the
+   line. Scoped to the surface's title row (its only direct flex child)
+   so no other stacked section is affected. */
+@media (max-width:640px) {
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .flex.justify-between {
+        gap: 12px
+    }
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .flex.justify-between > h2 {
+        min-width: 0
+    }
+    #tradeInModalOverlay.trade-in-workspace .trade-in-workspace-surface > .flex.justify-between > .btn {
+        flex: 0 0 auto
+    }
+}
+
+/* ============================================
+   PHASE 5B.1Q — TRADE-IN NOTIFICATIONS & NEGOTIATION UX
+   --------------------------------------------
+   PRESENTATION ONLY. Scoped to the Trade-In request detail modal
+   (#tradeInViewModal) and the reply modals (#counterOfferModal /
+   #reviseOfferModal), so nothing outside the Trade-In negotiation
+   flow is affected. Colours follow the existing HUFA palette
+   (orange #E48A2F primary, navy #08111F, slate grays).
+   ============================================ */
+
+/* --- Negotiation reply panel (private seller) --- */
+#tradeInViewModal .trade-negotiation {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    background: #F8FAFC;
+}
+
+#tradeInViewModal .trade-negotiation--dealer {
+    background: #FFF9EC;
+    border-color: rgba(228, 138, 47, .35)
+}
+
+#tradeInViewModal .trade-negotiation-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px
+}
+
+#tradeInViewModal .trade-negotiation-title {
+    font-size: 14px;
+    font-weight: 800;
+    color: #08111F;
+    letter-spacing: .2px
+}
+
+#tradeInViewModal .trade-negotiation-hint {
+    margin: 0 0 12px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #64748B
+}
+
+/* Action row: ONE full-width column on phones (big tap targets),
+   three columns from the sm breakpoint up. Accept always leads. */
+#tradeInViewModal .trade-negotiation-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px
+}
+
+@media (min-width: 640px) {
+    #tradeInViewModal .trade-negotiation-actions {
+        grid-template-columns: repeat(3, minmax(0, 1fr))
+    }
+}
+
+#tradeInViewModal .trade-negotiation-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 46px;
+    padding: 11px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .2px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .25s cubic-bezier(0.23, 1, 0.32, 1)
+}
+
+/* PRIMARY — the obvious next step (HUFA orange). */
+#tradeInViewModal .trade-negotiation-btn--accept {
+    background: linear-gradient(135deg, #E48A2F, #E48A2F);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #08111F;
+    box-shadow: 0 6px 18px rgba(228, 138, 47, 0.22)
+}
+
+#tradeInViewModal .trade-negotiation-btn--accept:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 32px rgba(228, 138, 47, 0.32)
+}
+
+/* INTERACTIVE — Counter Offer reads as a negotiation step. */
+#tradeInViewModal .trade-negotiation-btn--counter {
+    background: #FFFFFF;
+    border: 2px dashed #E48A2F;
+    color: #08111F
+}
+
+#tradeInViewModal .trade-negotiation-btn--counter:hover {
+    background: #FFF7ED;
+    border-style: solid;
+    transform: translateY(-2px)
+}
+
+/* DECLINE — clearly different from Accept. */
+#tradeInViewModal .trade-negotiation-btn--decline {
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    color: #B91C1C
+}
+
+#tradeInViewModal .trade-negotiation-btn--decline:hover {
+    background: #FEE2E2;
+    border-color: #FCA5A5;
+    transform: translateY(-2px)
+}
+
+#tradeInViewModal .trade-negotiation-btn:focus-visible {
+    outline: 3px solid rgba(228, 138, 47, .35);
+    outline-offset: 2px
+}
+
+/* Dealership-only counter response actions stay hidden while the
+   private seller reads the modal; the existing profiles check in
+   viewTradeInRequest() removes this class for a dealer account. */
+#tradeInViewModal .trade-dealer-only {
+    display: none
+}
+
+/* --- Per-valuation negotiation status chip (existing statuses) --- */
+.trade-status-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .3px;
+    white-space: nowrap
+}
+
+.trade-status-chip--awaiting {
+    background: #FEF9C3;
+    color: #854D0E;
+    border: 1px solid #FDE68A
+}
+
+.trade-status-chip--negotiating {
+    background: #EDE9FE;
+    color: #5B21B6;
+    border: 1px solid #DDD6FE
+}
+
+.trade-status-chip--accepted {
+    background: #DCFCE7;
+    color: #166534;
+    border: 1px solid #BBF7D0
+}
+
+.trade-status-chip--declined {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA
+}
+
+/* --- Counter Offer / Revise Offer reply modals --- */
+#counterOfferModal .trade-counter-offer-head,
+#reviseOfferModal .trade-counter-offer-head {
+    margin-bottom: 14px
+}
+
+#counterOfferModal .trade-counter-offer-subtitle,
+#reviseOfferModal .trade-counter-offer-subtitle {
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #64748B
+}
+
+#counterOfferModal .trade-counter-offer-offer,
+#reviseOfferModal .trade-counter-offer-offer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px;
+    margin-bottom: 16px;
+    background: #FFF9EC;
+    border: 1px solid rgba(228, 138, 47, .35);
+    border-radius: 14px
+}
+
+#counterOfferModal .trade-counter-offer-offer-label,
+#reviseOfferModal .trade-counter-offer-offer-label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: #B45309
+}
+
+#counterOfferModal .trade-counter-offer-offer-note,
+#reviseOfferModal .trade-counter-offer-offer-note {
+    margin-top: 6px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #334155
+}
+
+#counterOfferModal .trade-counter-offer-offer-amount,
+#reviseOfferModal .trade-counter-offer-offer-amount {
+    flex: 0 0 auto;
+    font-size: 20px;
+    font-weight: 800;
+    color: #08111F;
+    white-space: nowrap
+}
+
+#counterOfferModal .trade-counter-offer-label,
+#reviseOfferModal .trade-counter-offer-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #334155
+}
+
+/* Live "proposed counter" confirmation before submission. */
+#counterOfferModal .trade-counter-offer-preview {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    background: #F1F5F9;
+    border: 1px dashed #CBD5E1;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #08111F;
+    overflow-wrap: anywhere
+}
+
+/* TRADE-IN NEGOTIATION THREAD — text conversation per valuation.
+   Scoped to #tradeInViewModal only. Reuses the HUFA palette
+   (orange #E48A2F, navy #08111F, slate grays) and the existing
+   .trade-negotiation panel language. Oldest -> newest, newest at
+   the bottom with auto-scroll on load/send. */
+#tradeInViewModal .trade-negotiation--thread {
+    background: #FFFFFF;
+}
+
+#tradeInViewModal .trade-chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 12px;
+    margin: 0 0 12px;
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+}
+
+#tradeInViewModal .trade-chat-empty {
+    font-size: 13px;
+    color: #64748B;
+    text-align: center;
+    padding: 12px 4px;
+}
+
+#tradeInViewModal .trade-chat-msg {
+    max-width: 88%;
+    align-self: flex-start;
+    padding: 10px 12px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px 12px 12px 4px;
+}
+
+#tradeInViewModal .trade-chat-msg--mine {
+    align-self: flex-end;
+    background: #FFF7ED;
+    border-color: rgba(228, 138, 47, .45);
+    border-radius: 12px 12px 4px 12px;
+}
+
+#tradeInViewModal .trade-chat-who {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: #B45309;
+    margin-bottom: 4px;
+}
+
+#tradeInViewModal .trade-chat-text {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: #0F172A;
+    overflow-wrap: anywhere;
+}
+
+#tradeInViewModal .trade-chat-when {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #94A3B8;
+}
+
+#tradeInViewModal .trade-chat-new {
+    color: #5B21B6;
+}
+
+#tradeInViewModal .trade-chat-error {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #B91C1C;
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 12px;
+}
+
+#tradeInViewModal .trade-chat-composer {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+
+#tradeInViewModal .trade-chat-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 11px 14px;
+    font-size: 14px;
+    color: #0F172A;
+    background: #F9FAFB;
+    border: 1px solid #CBD5E1;
+    border-radius: 12px;
+}
+
+#tradeInViewModal .trade-chat-input:focus {
+    outline: 3px solid rgba(228, 138, 47, .28);
+    outline-offset: 1px;
+    border-color: #E48A2F;
+    background: #FFFFFF;
+}
+
+#tradeInViewModal .trade-chat-send {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 96px;
+    min-height: 46px;
+}
+
+#tradeInViewModal .trade-chat-send:disabled {
+    opacity: .6;
+    cursor: wait;
+    transform: none;
+}
+
+/* Reply modals stay comfortable on small phones. */
+@media (max-width: 480px) {
+    #counterOfferModal > div,
+    #reviseOfferModal > div {
+        padding: 18px 16px;
+        border-radius: 22px
+    }
+    #counterOfferModal .trade-counter-offer-offer-amount,
+    #reviseOfferModal .trade-counter-offer-offer-amount {
+        font-size: 18px
+    }
+    #tradeInViewModal .trade-negotiation {
+        padding: 14px
+    }
+}
+
+/* ============================================================
+   SAVED VEHICLES — LIST MODE OUTER CARD (horizontal)
+   Scoped to #savedList so Browse / other pages are unaffected.
+   ============================================================ */
+#savedList .vehicle-card-list {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px;
+}
+#savedList .vehicle-card-list > .relative.flex-shrink-0 {
+  width: 40%;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  flex-shrink: 0;
+  align-self: center;
+}
+#savedList .vehicle-card-list > .relative.flex-shrink-0 img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+#savedList .vehicle-card-list > .flex-1.min-w-0 {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+#savedList .vehicle-card-list > .flex-shrink-0.flex.items-center.gap-2 {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Saved Vehicles refinements: keep filtering and card actions contained to
+   this page, without changing the shared vehicle-card styles. */
+.saved-page #savedFilterToolbar,
+.saved-page .saved-advanced-filterbar,
+.saved-page #savedList,
+.saved-page #savedList > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.saved-page .saved-advanced-filterbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.saved-page .saved-advanced-filters {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid #dbe3ed;
+  border-radius: 10px;
+  background: rgba(255,255,255,.94);
+}
+.saved-page .saved-advanced-filters > summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 13px;
+  color: #18314f;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.saved-page .saved-advanced-filters > summary::-webkit-details-marker { display: none; }
+.saved-page .saved-advanced-filters > summary::after {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-right: 1.5px solid #64748b;
+  border-bottom: 1.5px solid #64748b;
+  content: "";
+  transform: rotate(45deg) translateY(-2px);
+}
+.saved-page .saved-advanced-filters[open] > summary::after { transform: rotate(225deg) translate(-2px,-1px); }
+.saved-page .saved-filter-count {
+  display: inline-flex;
+  min-width: 19px;
+  height: 19px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #005bbf;
+  font-size: 11px;
+}
+.saved-page .saved-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 11px;
+  padding: 0 12px 12px;
+}
+.saved-page .saved-filter-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #52647a;
+  font-size: 11px;
+  font-weight: 650;
+}
+.saved-page .saved-filter-grid select,
+.saved-page .saved-filter-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #fff;
+  color: #102033;
+  font-size: 12px;
+}
+.saved-page .saved-clear-filters,
+.saved-page .saved-card-actions button {
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid #cbd8e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #174a7e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.saved-page .saved-clear-filters { flex: 0 0 auto; }
+.saved-page .saved-card-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.saved-page .saved-card-actions .saved-card-compare-btn {
+  border-color: #005bbf;
+  background: #005bbf;
+  color: #fff;
+}
+.saved-page .saved-card-actions button:hover { filter: brightness(.96); }
+.saved-page .saved-card-actions button:focus-visible,
+.saved-page .saved-clear-filters:focus-visible,
+.saved-page .saved-advanced-filters > summary:focus-visible {
+  outline: 2px solid #005bbf;
+  outline-offset: 2px;
+}
+@media (max-width: 1023px) {
+  .saved-page .saved-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .saved-page #savedFilterToolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+  .saved-page #savedFilterToolbar > div:first-child {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    width: 100%;
+  }
+  .saved-page #savedFilterToolbar > div:first-child > * { width: 100%; }
+  .saved-page #savedFilterToolbar .saved-results-count {
+    grid-column: 1;
+    grid-row: 2;
+    width: auto;
+    text-align: left;
+  }
+  .saved-page #savedFilterToolbar #savedViewToggle {
+    grid-column: 2;
+    grid-row: 2;
+    justify-content: flex-end;
+    margin: 0;
+  }
+  .saved-page .saved-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .saved-page .saved-advanced-filterbar { align-items: stretch; }
+  .saved-page .saved-clear-filters { align-self: flex-start; }
+  .saved-page .saved-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  #savedList .vehicle-card-list {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 11px;
+    padding: 10px;
+  }
+  #savedList .vehicle-card-list > .relative.flex-shrink-0 {
+    width: 34%;
+    min-width: 105px;
+    max-width: 150px;
+    aspect-ratio: 4 / 3;
+    align-self: flex-start;
+  }
+  #savedList .vehicle-card-list > .flex-1.min-w-0 {
+    flex: 1 1 calc(66% - 125px);
+    width: calc(66% - 125px);
+  }
+  #savedList .vehicle-card-list > .flex-shrink-0.flex.items-center.gap-2 {
+    flex: 1 1 100%;
+    width: 100%;
+    margin: 0;
+    justify-content: flex-start;
+  }
+  #savedList .saved-list-actions { width: 100%; justify-content: flex-start; }
+}
+@media (max-width: 420px) {
+  .saved-page .saved-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .saved-page .saved-advanced-filterbar { gap: 6px; }
+  .saved-page .saved-clear-filters { padding-inline: 8px; font-size: 11px; }
+  #savedList .vehicle-card-list > .relative.flex-shrink-0 { width: 100%; max-width: none; }
+  #savedList .vehicle-card-list > .flex-1.min-w-0 { flex-basis: 100%; width: 100%; }
+}
+
+/* Browse mobile toolbar: keep the count intact and give controls explicit
+   grid positions so narrow screens cannot compress or clip them. */
+@media (max-width: 767px) {
+  .browse-results-toolbar {
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .browse-results-toolbar #resultMeta {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: max-content;
+    width: max-content;
+    max-width: 100%;
+    flex: none;
+    overflow: visible;
+    white-space: nowrap;
+    text-overflow: clip;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+  .browse-results-toolbar .browse-toolbar-actions {
+    display: contents;
+  }
+  .browse-results-toolbar [data-card-detail-selector] {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+    gap: 4px;
+  }
+  .browse-results-toolbar [data-card-detail-selector] button {
+    padding-left: 6px;
+    padding-right: 6px;
+    white-space: nowrap;
+  }
+  .browse-results-toolbar .browse-toolbar-filter-btn {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    min-width: max-content;
+  }
+  .browse-results-toolbar .browse-sort-wrap {
+    grid-column: 3;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    gap: 0;
+  }
+  .browse-results-toolbar .browse-sort-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    box-sizing: border-box;
+    text-overflow: ellipsis;
+  }
+  .browse-results-toolbar .browse-toolbar-view-controls {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    min-width: max-content;
+    gap: 6px;
+  }
+}
+
+/* At very narrow widths, reserve a full final row for sorting while keeping
+   the count and grid/list controls together above it. */
+@media (max-width: 359px) {
+  .browse-results-toolbar {
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 7px;
+  }
+  .browse-results-toolbar [data-card-detail-selector] {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .browse-results-toolbar .browse-toolbar-filter-btn {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .browse-results-toolbar .browse-sort-wrap {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .browse-results-toolbar .browse-toolbar-view-controls {
+    gap: 4px;
+  }
+  .browse-results-toolbar #resultMeta {
+    font-size: 11px;
+  }
+}
+
+/* Final Compare-page phone layout refinements. */
+@media (max-width: 767px) {
+  .compare-page {
+    padding-top: 20px;
+    padding-bottom: 30px;
+    overflow-x: clip;
+  }
+  .compare-page-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 15px;
+    margin-bottom: 18px;
+  }
+  .compare-page-heading { min-width: 0; }
+  .compare-page .compare-page-title {
+    font-size: clamp(1.65rem, 7vw, 2rem);
+    line-height: 1.08;
+  }
+  .compare-page-description {
+    max-width: 36rem;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .compare-page-header-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .compare-page-header-actions .compare-action-btn {
+    min-width: 0;
+    min-height: 46px;
+    height: auto;
+    padding: 10px 12px;
+    text-align: center;
+    white-space: normal;
+  }
+  .compare-tools {
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 14px;
+  }
+  .compare-search-input,
+  .compare-sort-select {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .compare-suggestions {
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: calc(100vw - 40px);
+  }
+  .compare-suggestion {
+    min-height: 60px;
+    gap: 10px;
+    padding: 10px;
+  }
+  .compare-suggestion-name { font-size: 13px; }
+  .compare-suggestion-meta { font-size: 11px; }
+  .compare-suggestion-status { font-size: 11px; }
+  .compare-page .compare-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .compare-page .compare-card-shell,
+  .compare-page .vehicle-card { width: 100%; min-width: 0; }
+  .compare-page .vehicle-card .relative.overflow-hidden {
+    width: 100%;
+    height: clamp(180px, 52vw, 260px);
+    max-height: 260px;
+    aspect-ratio: 16 / 9;
+  }
+  .compare-page .vehicle-card img {
+    object-fit: contain;
+    object-position: center;
+  }
+  .compare-page .vehicle-card-body { padding: 14px 14px 16px; }
+  .compare-page .vehicle-card .text-sm.font-semibold {
+    min-height: 0;
+    font-size: 16px;
+    line-height: 1.35;
+  }
+  .compare-page .vehicle-card .text-base.font-bold { font-size: 19px; }
+  .compare-page .vehicle-card .vehicle-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 {
+    gap: 7px;
+    margin-top: 10px;
+  }
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 > div { padding: 9px 6px; }
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 .text-\[9px\],
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 .text-\[10px\] { font-size: 10px; }
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 .text-\[11px\],
+  .compare-page .vehicle-card .grid.grid-cols-3.gap-1.mt-1\.5 .text-xs { font-size: 12px; }
+  .compare-page .vehicle-card .border-t.border-slate-100 { margin-top: 10px; padding-top: 10px; }
+  .compare-page .vehicle-card .border-t.border-slate-100 button,
+  .compare-page .vehicle-card-body > .mt-auto button,
+  .compare-page [data-card-details-toggle] { min-height: 44px; }
+  .compare-page .compare-table-scroll { max-width: 100%; }
+  .compare-page .compare-table-scroll .compare-table { min-width: 540px; }
+  .compare-page .compare-table-head,
+  .compare-page .compare-table-row {
+    grid-template-columns: minmax(125px, 135px) repeat(auto-fit, minmax(175px, 1fr));
+  }
+  .compare-page .compare-table-spec-label {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 0;
+    padding: 8px 10px;
+    background: #FAFBFC;
+    font-size: 10px;
+    letter-spacing: .04em;
+  }
+  .compare-page .compare-table-head .compare-table-spec-label { background: #F8FAFC; }
+  .compare-page .compare-table-vehicle-name,
+  .compare-page .compare-table-value { padding: 8px 10px; font-size: 12px; }
+  .compare-detail-scroll { max-width: 100%; }
+  .compare-detail-scroll .compare-detailed-table { min-width: max-content; }
+  .compare-detail-scroll .compare-detail-header,
+  .compare-detail-scroll .compare-detail-row { min-width: 530px; }
+}
+
+@media (max-width: 350px) {
+  .compare-page .compare-tools { padding: 12px; }
+  .compare-page .compare-suggestion-image { width: 48px; flex-basis: 48px; }
+  .compare-page .compare-page-header-actions { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Mobile-only comparison summaries and category accordions. */
+.compare-mobile-summary,
+.compare-mobile-detailed,
+.compare-mobile-summary-skeleton,
+.compare-mobile-detailed-skeleton {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .compare-page .compare-desktop-summary-table,
+  .compare-page .compare-desktop-detailed {
+    display: none;
+  }
+  .compare-page .compare-mobile-summary,
+  .compare-page .compare-mobile-detailed,
+  .compare-page .compare-mobile-summary-skeleton,
+  .compare-page .compare-mobile-detailed-skeleton {
+    display: grid;
+    gap: 10px;
+  }
+  .compare-page .compare-mobile-spec-card,
+  .compare-page .compare-mobile-detail-accordion,
+  .compare-page .compare-mobile-accordion-skeleton {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #DCE5EF;
+    border-radius: 13px;
+    background: rgba(255,255,255,.96);
+    box-shadow: 0 3px 12px rgba(15,23,42,.045);
+  }
+  .compare-page .compare-mobile-spec-card { padding: 12px; }
+  .compare-page .compare-mobile-spec-card > h3,
+  .compare-page .compare-mobile-detail-row > h3 {
+    margin: 0 0 9px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: .035em;
+  }
+  .compare-page .compare-mobile-spec-columns,
+  .compare-page .compare-mobile-detail-values {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+    gap: 8px;
+  }
+  .compare-page .compare-mobile-spec-vehicle,
+  .compare-page .compare-mobile-detail-value {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 9px;
+    border: 1px solid #E8EEF5;
+    border-radius: 9px;
+    background: #F8FAFC;
+    overflow-wrap: anywhere;
+  }
+  .compare-page .compare-mobile-spec-vehicle-name {
+    color: #1E3A5F;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .compare-page .compare-mobile-spec-vehicle-value,
+  .compare-page .compare-mobile-detail-value > span:last-child {
+    color: #0F172A;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .compare-page .compare-mobile-detailed { margin-top: 10px; }
+  .compare-page .compare-mobile-detail-accordion > summary {
+    display: flex;
+    min-height: 50px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    color: #0F2742;
+    font-size: 14px;
+    font-weight: 750;
+    cursor: pointer;
+    list-style: none;
+  }
+  .compare-page .compare-mobile-detail-accordion > summary::-webkit-details-marker { display: none; }
+  .compare-page .compare-mobile-accordion-icon {
+    position: relative;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    border: 1px solid #CBD5E1;
+    border-radius: 50%;
+  }
+  .compare-page .compare-mobile-accordion-icon::before,
+  .compare-page .compare-mobile-accordion-icon::after {
+    position: absolute;
+    top: 8px;
+    left: 4px;
+    width: 8px;
+    height: 1.5px;
+    background: #31516F;
+    content: "";
+  }
+  .compare-page .compare-mobile-accordion-icon::after { transform: rotate(90deg); transition: transform .15s ease; }
+  .compare-page .compare-mobile-detail-accordion[open] .compare-mobile-accordion-icon::after { transform: rotate(0); }
+  .compare-page .compare-mobile-detail-accordion > summary:focus-visible {
+    outline: 2px solid #005BBF;
+    outline-offset: -2px;
+  }
+  .compare-page .compare-mobile-detail-rows {
+    display: grid;
+    gap: 9px;
+    padding: 0 11px 12px;
+  }
+  .compare-page .compare-mobile-detail-row {
+    min-width: 0;
+    padding-top: 10px;
+    border-top: 1px solid #E8EEF5;
+  }
+  .compare-page .compare-mobile-detail-row > h3 { padding: 0 2px; }
+  .compare-page .compare-mobile-accordion-skeleton {
+    display: flex;
+    min-height: 50px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 700;
+  }
+}
+
+/* Saved Vehicles final refinement. Compare page controls supply the shared
+   search/sort treatment; all remaining selectors stay Saved-page scoped. */
+.saved-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.saved-page .saved-summary {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+.saved-page .saved-summary-icon { display: grid; place-items: center; color: #005bbf; }
+.saved-page .saved-summary-count { color: #081120; font-size: 18px; font-weight: 850; line-height: 1; }
+.saved-page .saved-summary-label { color: #64748b; font-size: 11px; font-weight: 650; }
+.saved-page .saved-tools-panel {
+  grid-template-columns: minmax(0,1fr) minmax(220px,280px);
+  margin-bottom: 10px;
+}
+.saved-page #savedFilterToolbar {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(220px,280px);
+  align-items: end;
+  justify-content: initial;
+  gap: 14px;
+  margin-bottom: 10px;
+  padding: 14px;
+}
+.saved-page #savedFilterToolbar > .saved-search-wrap {
+  display: block;
+  width: auto;
+  min-width: 0;
+  flex: initial;
+}
+.saved-page #savedFilterToolbar > .saved-sort-wrap {
+  display: block;
+  width: auto;
+  min-width: 0;
+  flex: initial;
+}
+.saved-page .saved-search-wrap { min-width: 0; }
+.saved-page .saved-search-input { padding-right: 43px; }
+.saved-page .saved-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  z-index: 2;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+.saved-page .saved-sort-wrap { min-width: 0; }
+.saved-page .saved-sort-select { appearance: none; padding-right: 38px; }
+.saved-page .saved-sort-chevron {
+  position: absolute;
+  right: 12px;
+  bottom: 13px;
+  width: 16px;
+  height: 16px;
+  color: #64748b;
+  pointer-events: none;
+}
+.saved-page .saved-sort-chevron svg { display: block; width: 100%; height: 100%; }
+.saved-results-toolbar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.saved-page .saved-filterbar { position: relative; margin-bottom: 10px; }
+.saved-page .saved-filter-trigger {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  color: #18314f;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 3px 12px rgba(15,23,42,.035);
+  cursor: pointer;
+}
+.saved-page .saved-filter-trigger > svg:first-child { width: 18px; height: 18px; color: #35618a; }
+.saved-page .saved-filter-trigger .saved-filter-chevron { width: 16px; height: 16px; margin-left: 4px; color: #64748b; transition: transform .18s ease; }
+.saved-page .saved-filter-trigger[aria-expanded="true"] .saved-filter-chevron { transform: rotate(180deg); }
+.saved-page .saved-filter-count {
+  display: inline-flex;
+  min-width: 19px;
+  height: 19px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #005bbf;
+  font-size: 11px;
+  font-weight: 750;
+}
+.saved-page .saved-filter-panel:not(.hidden) {
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  padding: 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 45px rgba(15,23,42,.14);
+}
+.saved-filter-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.saved-filter-panel-header h2 { margin: 0; color: #0f172a; font-size: 16px; font-weight: 800; }
+.saved-page .saved-filter-close { display: none; }
+.saved-page .saved-filter-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+.saved-page .saved-filter-group {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  align-content: start;
+  gap: 11px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e8edf3;
+  border-radius: 12px;
+}
+.saved-page .saved-filter-group legend { padding: 0 5px; color: #334155; font-size: 12px; font-weight: 750; }
+.saved-page .saved-filter-group label { display: grid; min-width: 0; gap: 5px; color: #52647a; font-size: 11px; font-weight: 650; }
+.saved-page .saved-filter-group select,
+.saved-page .saved-filter-group input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #081120;
+  font-size: 13px;
+  outline: none;
+}
+.saved-page .saved-filter-group select:focus,
+.saved-page .saved-filter-group input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.saved-page .saved-filter-location { grid-column: 1 / -1; grid-template-columns: minmax(0,1fr); }
+.saved-page .saved-filter-location label { max-width: 50%; }
+.saved-filter-panel-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+.saved-page .saved-filter-reset,
+.saved-page .saved-filter-apply {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #24415f;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.saved-page .saved-filter-apply { border-color: #005bbf; background: #005bbf; color: #fff; }
+.saved-filter-apply-mobile { display: none; }
+.saved-active-chips:not(.hidden) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 14px; }
+.saved-page .saved-filter-chip {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid #d7e3f0;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: #24415f;
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.saved-page .saved-filter-chip span:last-child { color: #64748b; font-size: 16px; line-height: 1; }
+.saved-page .saved-filter-clear-all { min-height: 32px; padding: 0 4px; border: 0; background: transparent; color: #005bbf; font-size: 12px; font-weight: 750; cursor: pointer; }
+.saved-filter-backdrop { display: none; }
+.saved-page .vehicle-card .vehicle-card-body { min-width: 0; }
+.saved-page .vehicle-card [data-card-details-toggle] { min-height: 40px; touch-action: manipulation; }
+.saved-page .saved-card-actions { flex-wrap: wrap; }
+.saved-page .saved-card-actions button { min-height: 40px; padding-inline: 12px; }
+#savedList .vehicle-card-list .saved-list-actions { flex-wrap: wrap; gap: 7px; }
+
+@media (max-width: 767px) {
+  .saved-page #savedFilterToolbar {
+    display: grid;
+    grid-template-columns: minmax(0,1fr);
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 12px;
+  }
+  .saved-page #savedFilterToolbar > .saved-search-wrap,
+  .saved-page #savedFilterToolbar > .saved-sort-wrap {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    flex: initial;
+  }
+  .saved-page-heading { align-items: center; gap: 12px; }
+  .saved-page-heading > div:first-child { min-width: 0; }
+  .saved-page-heading p { max-width: 100%; }
+  .saved-page .saved-summary { padding: 7px 9px; }
+  .saved-page .saved-tools-panel { grid-template-columns: minmax(0,1fr); gap: 10px; margin-bottom: 10px; padding: 12px; }
+  .saved-page .saved-sort-chevron { bottom: 13px; }
+  .saved-results-toolbar { min-height: 34px; margin-bottom: 6px; }
+  .saved-page .saved-filterbar { margin-bottom: 8px; }
+  .saved-page .saved-filter-trigger { width: 100%; justify-content: flex-start; }
+  .saved-page .saved-filter-trigger .saved-filter-chevron { margin-left: auto; }
+  .saved-page .saved-filter-backdrop:not(.hidden) {
+    position: fixed;
+    z-index: 1000;
+    inset: 0;
+    display: block;
+    background: rgba(8,17,32,.48);
+    backdrop-filter: blur(2px);
+  }
+  .saved-page .saved-filter-panel:not(.hidden) {
+    position: fixed;
+    z-index: 1001;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    max-height: min(88dvh, 760px);
+    flex-direction: column;
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 40px rgba(15,23,42,.2);
+    animation: saved-filter-sheet-in .2s ease-out;
+  }
+  @keyframes saved-filter-sheet-in { from { transform: translateY(24px); opacity: .75; } to { transform: translateY(0); opacity: 1; } }
+  .saved-page .saved-filter-panel-header { flex: 0 0 auto; margin: 0; padding: 17px 18px 13px; border-bottom: 1px solid #edf1f5; }
+  .saved-page .saved-filter-panel-header h2 { font-size: 17px; }
+  .saved-page .saved-filter-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #334155; font-size: 25px; line-height: 1; }
+  .saved-page .saved-filter-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 10px; min-height: 0; padding: 13px 16px; overflow-y: auto; overscroll-behavior: contain; }
+  .saved-page .saved-filter-group { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; padding: 10px; }
+  .saved-page .saved-filter-group select,
+  .saved-page .saved-filter-group input { height: 44px; }
+  .saved-page .saved-filter-location label { max-width: none; }
+  .saved-filter-panel-actions { position: sticky; z-index: 1; flex: 0 0 auto; justify-content: stretch; gap: 10px; margin: 0; padding: 12px 16px max(14px,env(safe-area-inset-bottom)); border-top: 1px solid #edf1f5; background: #fff; }
+  .saved-page .saved-filter-panel-actions button { flex: 1 1 0; min-height: 48px; }
+  .saved-filter-apply-desktop { display: none; }
+  .saved-page .saved-filter-apply-mobile { display: inline; }
+  body.saved-filter-open { overflow: hidden; }
+  .saved-page .saved-grid { grid-template-columns: minmax(0,1fr) !important; }
+  #savedList .vehicle-card:not(.vehicle-card-list) { overflow: hidden; border-radius: 16px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) > .relative.overflow-hidden { width: 100%; aspect-ratio: 16 / 10; max-height: 250px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) > .relative.overflow-hidden img { width: 100%; height: 100%; object-fit: contain; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .vehicle-card-body { padding: 12px !important; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .vehicle-meta { flex-wrap: wrap; row-gap: 4px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .border-t.border-slate-100 { flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .border-t.border-slate-100 > span { flex: 1 1 100%; max-width: 100%; overflow-wrap: anywhere; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .border-t.border-slate-100 > div { width: 100%; flex-wrap: wrap; gap: 8px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .saved-card-actions { width: 100%; justify-content: stretch; gap: 8px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .saved-card-actions button { flex: 1 1 100px; min-height: 44px; }
+  #savedList .vehicle-card:not(.vehicle-card-list) .mt-auto.pt-2 button { min-height: 46px; }
+  #savedList .vehicle-card-list { flex-wrap: wrap; align-items: flex-start; gap: 10px; padding: 11px; }
+  #savedList .vehicle-card-list > .relative.flex-shrink-0 { width: 105px; min-width: 105px; max-width: 35%; aspect-ratio: 4 / 3; }
+  #savedList .vehicle-card-list > .relative.flex-shrink-0 img { object-fit: contain; }
+  #savedList .vehicle-card-list > .flex-1.min-w-0 { flex: 1 1 calc(100% - 120px); width: calc(100% - 120px); }
+  #savedList .vehicle-card-list .vehicle-meta { flex-wrap: wrap; row-gap: 4px; }
+  #savedList .vehicle-card-list > .flex-shrink-0.flex.items-center.gap-2 { flex: 1 1 100%; width: 100%; margin: 0; }
+  #savedList .vehicle-card-list .saved-list-actions { display: flex; width: 100%; justify-content: stretch; gap: 7px; }
+  #savedList .vehicle-card-list .saved-list-actions button { flex: 1 1 85px; min-height: 44px; padding-inline: 8px; }
+}
+@media (max-width: 390px) {
+  .saved-page-heading { align-items: flex-start; }
+  .saved-page .saved-summary { gap: 5px; padding: 6px 7px; }
+  .saved-page .saved-summary-icon { display: none; }
+  .saved-page .saved-filter-group { grid-template-columns: minmax(0,1fr); }
+  #savedList .vehicle-card-list > .relative.flex-shrink-0 { width: 88px; min-width: 88px; }
+  #savedList .vehicle-card-list > .flex-1.min-w-0 { flex-basis: calc(100% - 100px); width: calc(100% - 100px); }
+  #savedList .vehicle-card-list .saved-list-actions button { flex-basis: 100%; }
+}
+
+/* Saved collection toolbar and search autocomplete corrections. */
+.saved-page .saved-results-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  overflow: visible;
+}
+.saved-page .saved-filterbar {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0;
+  overflow: visible;
+}
+.saved-page .saved-filter-trigger { width: auto; min-height: 42px; }
+.saved-page #savedViewToggle { flex: 0 0 auto; }
+.saved-page #savedViewToggle > div { align-items: center; gap: 6px; }
+.saved-page #savedViewToggle button {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 10px;
+}
+.saved-page .saved-filter-panel:not(.hidden) {
+  right: auto;
+  width: min(760px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+.saved-page .saved-search-wrap {
+  position: relative;
+  z-index: 80;
+  overflow: visible;
+}
+.saved-page .saved-search-suggestions:not(.hidden) {
+  position: absolute;
+  z-index: 81;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  max-height: min(360px, 55vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(15,23,42,.16);
+}
+.saved-page #savedSuggestionList { display: grid; gap: 2px; min-width: 0; }
+.saved-page .saved-suggestion-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0,1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  border-radius: 8px;
+  background: #fff;
+  color: #081120;
+  text-align: left;
+  cursor: pointer;
+}
+.saved-page .saved-suggestion-row:last-child { border-bottom-color: transparent; }
+.saved-page .saved-suggestion-row:hover,
+.saved-page .saved-suggestion-row:focus-visible,
+.saved-page .saved-suggestion-row.is-active {
+  outline: none;
+  background: #f0f6ff;
+}
+.saved-page .saved-suggestion-content { display: grid; min-width: 0; gap: 2px; }
+.saved-page .saved-suggestion-title {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-page .saved-suggestion-subtitle {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-page .saved-suggestion-category {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid #e2eaf3;
+  border-radius: 999px;
+  background: #f7faff;
+  color: #52647a;
+  font-size: 10px;
+  font-weight: 700;
+}
+.saved-page .saved-suggestion-empty { padding: 13px 11px; color: #64748b; font-size: 12px; text-align: center; }
+@media (max-width: 767px) {
+  .saved-page .saved-results-toolbar { gap: 8px; }
+  .saved-page .saved-filter-trigger { width: auto; gap: 7px; padding-inline: 10px; }
+  .saved-page .saved-filter-panel:not(.hidden) { width: auto; max-width: none; }
+  .saved-page .saved-search-suggestions:not(.hidden) { max-height: min(320px, 48vh); }
+}
+@media (max-width: 380px) {
+  .saved-page .saved-results-toolbar { gap: 6px; }
+  .saved-page .saved-filter-trigger { gap: 6px; padding-inline: 8px; font-size: 12px; }
+  .saved-page #savedViewToggle > div { gap: 4px; }
+  .saved-page #savedViewToggle button { width: 40px; height: 40px; flex-basis: 40px; }
+}
+
+/* Vehicle detail price/action row: keep its controls aligned within the
+   existing right-hand panel without changing the surrounding page layout. */
+.vehicle-detail-price-actions { min-width: 0; }
+.vehicle-detail-action-group {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.vehicle-detail-action-group > .vehicle-detail-icon-action {
+  display: inline-flex;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  padding: 0;
+}
+.vehicle-detail-action-group .vehicle-detail-action-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+.vehicle-detail-action-group > .vehicle-detail-interest-action,
+.vehicle-detail-action-group > .vehicle-detail-contact-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 11px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  transform: none;
+}
+.vehicle-detail-action-group > .vehicle-detail-contact-action:hover {
+  transform: none;
+}
+.vehicle-interest-sent-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+@media (max-width: 1150px) {
+  .vehicle-detail-action-group {
+    display: grid;
+    grid-template-columns: 38px 38px minmax(0, 1fr);
+    justify-content: stretch;
+    gap: 7px;
+  }
+  .vehicle-detail-action-group > .vehicle-detail-interest-action {
+    min-width: 0;
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+  .vehicle-detail-action-group > .vehicle-detail-contact-action {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .vehicle-detail-action-group {
+    grid-template-columns: 38px 38px minmax(0, 1fr);
+    gap: 6px;
+  }
+  .vehicle-detail-action-group > .vehicle-detail-interest-action {
+    font-size: 11px;
+    padding-inline: 4px;
+  }
+}
+
+/* CRM manual lead temperature selector, shared by lead cards and profile. */
+.crm-temperature-control {
+  display: inline-flex;
+  align-items: center;
+  min-height: 29px;
+  max-width: 100%;
+  padding: 4px 28px 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.crm-temperature-control:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+.crm-temperature-cold {
+  border-color: #bfdbfe;
+  background-color: #eff6ff;
+  color: #1d4ed8;
+}
+.crm-temperature-warm {
+  border-color: #fed7aa;
+  background-color: #fff7ed;
+  color: #c2410c;
+}
+.crm-temperature-hot {
+  border-color: #fecaca;
+  background-color: #fef2f2;
+  color: #b91c1c;
+}
+.crm-temperature-unclassified {
+  border-color: #e2e8f0;
+  background-color: #f1f5f9;
+  color: #64748b;
+}
+.crm-temperature-readonly {
+  padding-right: 10px;
+  cursor: default;
+}
+.crm-temperature-caption {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  line-height: 1.25;
+}
+.crm-temperature-field {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.crm-profile-temperature {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 12px;
+}

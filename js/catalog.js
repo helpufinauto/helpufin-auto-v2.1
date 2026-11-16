@@ -5,6 +5,7 @@ HUFA SHARED CATALOGUE SERVICE
 */
 
 import { supabase } from "./api.js";
+import { MAKES } from "./searchData.js";
 
 /* =========================================================
 SESSION CACHE
@@ -284,10 +285,87 @@ cache.categories[category] =
 
 }
 
-/* =========================================================
-PUBLIC GETTERS
-========================================================= */
+export async function getVehicleMakeCounts(options = {}){
+  const scope = options.scope || "public";
+  const sellerId = options.sellerId || null;
+  const freq = {}; // lower -> Map(display -> count)
+  const totals = {}; // lower -> total
+  try{
+    const pageSize = 1000;
+    let from = 0;
+    while(true){
+      let q = supabase.from("vehicles").select("make,seller_id").eq("status","active");
+      if(scope === "user" && sellerId){ q = q.eq("seller_id", sellerId); }
+      const { data, error } = await q.range(from, from + pageSize - 1);
+      if(error){ throw error; }
+      (data || []).forEach(row => {
+        const raw = String(row?.make || "").trim();
+        if(!raw) return;
+        const key = raw.toLowerCase();
+        if(!freq[key]) freq[key] = {};
+        freq[key][raw] = (freq[key][raw] || 0) + 1;
+        totals[key] = (totals[key] || 0) + 1;
+      });
+      if(!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+  }catch(e){
+    console.error("Make counts failed:", e);
+  }
+  // canonical display
+  const counts = {};
+  Object.keys(totals).forEach(key => {
+    let canonical = null;
+    const known = MAKES.find(m => String(m).trim().toLowerCase() === key);
+    if(known) canonical = known;
+    else {
+      const entries = Object.entries(freq[key]);
+      entries.sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+      canonical = entries.length ? entries[0][0] : key;
+    }
+    counts[canonical] = totals[key];
+  });
+  return counts;
+}
 
+
+export async function getVehicleBodyCounts(options = {}){
+  const scope = options.scope || "public";
+  const sellerId = options.sellerId || null;
+  const totals = {};
+  const freq = {};
+  try{
+    const bodyTypes = await getBodyTypes();
+    const pageSize = 1000;
+    let from = 0;
+    while(true){
+      let q = supabase.from("vehicles").select("body_type,seller_id").eq("status","active");
+      if(scope === "user" && sellerId){ q = q.eq("seller_id", sellerId); }
+      const { data, error } = await q.range(from, from + pageSize - 1);
+      if(error){ throw error; }
+      (data || []).forEach(row => {
+        const raw = String(row?.body_type || "").trim();
+        if(!raw) return;
+        const key = raw.toLowerCase();
+        if(!freq[key]) freq[key] = {};
+        freq[key][raw] = (freq[key][raw] || 0) + 1;
+        totals[key] = (totals[key] || 0) + 1;
+      });
+      if(!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+    const counts = {};
+    Object.keys(totals).forEach(key => {
+      const known = (bodyTypes || []).find(t => String(t).trim().toLowerCase() === key);
+      const canonical = known ? String(known).trim() : (Object.entries(freq[key] || {}).sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]))[0]?.[0] || key);
+      counts[canonical] = totals[key];
+    });
+    return counts;
+  }catch(e){
+    console.error("Body counts failed:", e);
+    return {};
+  }
+}
 export async function getMakes(vehicleCategory = null){
 
 if(!catalogLoaded){
@@ -719,4 +797,145 @@ console.log("HUFA CATALOG CACHE", cache);
 
 return cache;
 
+}
+
+/* =========================================================
+HUFA VEHICLE CATALOGUE VARIANT SELECTION (ISOLATED EXTENSION)
+---------------------------------------------------------
+Authoritative table: public.hufa_vehicle_catalogue.
+This block is ADDITIVE ONLY: it never touches the existing
+variants/vehicle_catalog caches or their return shapes.
+All functions fail soft (return []) when the table is absent
+or unreachable, so the legacy Make→Model→Variant flow and the
+OTHER/manual fallback always keep working.
+No vehicle_code is ever invented — vehicle_code is only ever
+read from the database row.
+========================================================= */
+
+const HUFA_CATALOG_TABLE = "hufa_vehicle_catalogue";
+
+const HUFA_CATALOG_COLUMNS = [
+"id",
+"variant_id",
+"vehicle_code",
+"year_active",
+"introduced",
+"terminated",
+"vehicle_type",
+"manufacturer",
+"model",
+"variant",
+"cc",
+"kw",
+"doors",
+"seats",
+"body_style",
+"fuel_type",
+"transmission",
+"drive_type",
+"engine_size_l",
+"torque_nm",
+"cylinders",
+"turbocharged",
+"fuel_consumption_l100",
+"co2_emissions_gkm",
+"commercial_vehicle",
+"commercial_category",
+"cab_configuration",
+"payload_capacity_kg",
+"towing_capacity_kg",
+"is_electric",
+"is_hybrid",
+"is_plugin_hybrid",
+"battery_capacity_kwh",
+"battery_range_km",
+"charging_time_hours",
+"fast_charging",
+"charge_port",
+"charge_port_location",
+"powertrain_type",
+"electric_range_km",
+"active"
+].join(",");
+
+/* Null when unknown, false when the table is proven unreachable,
+true once a query has succeeded. Lets Upload Vehicle decide
+whether to show a year dropdown (catalogue years) or keep the
+plain year input + legacy variant dropdown. */
+let hufaCatalogAvailable = null;
+
+export function isHufaCatalogAvailable(){
+return hufaCatalogAvailable;
+}
+
+function hufaCatalogRowIsUsable(row){
+if(!row || typeof row !== "object"){ return false; }
+if(!row.manufacturer || !row.model){ return false; }
+return true;
+}
+
+function hufaCatalogEq(query, column, value){
+/* Exact match on trimmed text — mirrors existing data
+conventions (makes/models are matched exactly elsewhere). */
+const v = String(value ?? "").trim();
+if(!v){ return query; }
+return query.eq(column, v);
+}
+
+/* Distinct active year_active values for a manufacturer+model,
+newest first. Never invents years. */
+export async function getHufaCatalogYears(manufacturer, model){
+const make = String(manufacturer ?? "").trim();
+const mdl = String(model ?? "").trim();
+if(!make || !mdl){ return []; }
+try{
+const { data, error } = await supabase
+.from(HUFA_CATALOG_TABLE)
+.select("year_active")
+.eq("active", true)
+.eq("manufacturer", make)
+.eq("model", mdl)
+.order("year_active", { ascending: false })
+.limit(200);
+if(error){ throw error; }
+hufaCatalogAvailable = true;
+const years = [];
+for(const row of (data || [])){
+const y = Number(row?.year_active);
+if(!Number.isFinite(y)){ continue; }
+if(!years.includes(y)){ years.push(y); }
+}
+return years.sort((a, b)=>b - a);
+}catch(e){
+/* Table missing / RLS denial / network: legacy flow continues. */
+hufaCatalogAvailable = false;
+return [];
+}
+}
+
+/* Active catalogue records for manufacturer+model+year_active,
+ordered by variant name. Only existing fields are selected. */
+export async function getHufaCatalogVariants(manufacturer, model, yearActive){
+const make = String(manufacturer ?? "").trim();
+const mdl = String(model ?? "").trim();
+const yearNum = Number(yearActive);
+if(!make || !mdl || !Number.isFinite(yearNum)){ return []; }
+try{
+let query = supabase
+.from(HUFA_CATALOG_TABLE)
+.select(HUFA_CATALOG_COLUMNS)
+.eq("active", true)
+.eq("year_active", yearNum)
+.order("variant", { ascending: true })
+.limit(200);
+query = hufaCatalogEq(query, "manufacturer", make);
+query = hufaCatalogEq(query, "model", mdl);
+const { data, error } = await query;
+if(error){ throw error; }
+hufaCatalogAvailable = true;
+return (data || []).filter(hufaCatalogRowIsUsable);
+}catch(e){
+hufaCatalogAvailable = false;
+return [];
+}
 }

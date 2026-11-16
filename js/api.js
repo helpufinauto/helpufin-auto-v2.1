@@ -26,6 +26,19 @@ import {
 rejectZipFile
 } from "./fileValidation.js";
 
+import { purgeUserDrafts } from "./draftStore.js";
+
+/* PHASE 4 — user-scoped IndexedDB purge for the Upload
+Vehicle image draft on sign-out (same contract as the
+sessionStorage draft purge; no other data is touched). */
+import { clearUploadVehicleImageDraft } from "./uploadVehicleImageStore.js";
+
+/* PHASE 6B — user-scoped IndexedDB purge for the Trade-In
+image draft on sign-out (same contract as the Upload
+Vehicle image purge; no other data is touched). */
+import { clearTradeInImageDraft } from "./tradeInImageStore.js";
+
+
 
 /* ====================================================
 🔥 SELLER PROFILE + LIMIT SYSTEM
@@ -206,16 +219,40 @@ function buildAuthoritativeProfileInsert(user){
       : null;
 
   /* PHASE 4 — canonical name alias. Historic signup metadata may carry
-     the given name under alternate keys; first_name stays authoritative
-     in profiles while name remains populated for legacy readers. */
+     the given name under alternate keys; profiles.name is written from
+     either one so legacy readers always have a value. */
   const givenName =
     pickText("first_name") ||
     pickText("name");
 
+  /* PHASE 2 (NEW-DEALERSHIP CONTINUITY) — the payload is restricted to
+     columns that ACTUALLY EXIST on the live public.profiles table
+     (verified against the live schema cache). PostgREST validates the
+     insert payload against the schema cache BEFORE RLS, so ONE unknown
+     column makes the whole INSERT fail with PGRST204
+     ("Could not find the 'first_name' column of 'profiles' in the schema
+     cache") and NO profile row is ever created. That is exactly why a new
+     dealership account never reached the dealer dashboard, never showed
+     "Edit Dealership Page" and never appeared in the public /dealerships
+     directory, while existing dealerships (whose rows already exist) were
+     unaffected.
+
+     first_name / mobile_number / whatsapp_number / bio / location / city /
+     website are NOT columns of public.profiles. Those signup values stay
+     in auth user_metadata (schemaless — no data loss, no duplication, and
+     province/city are not re-collected or duplicated anywhere) and are no
+     longer written to a non-existent column.
+
+     suspended:false is set explicitly because EVERY existing profiles row
+     (including every working dealership) carries suspended = false and the
+     public directory filters on it (neq true). Writing the same explicit
+     value keeps a new dealership in exactly the same state as the working
+     reference dealership instead of relying on NULL comparison
+     semantics. No schema change, no package/limit change, no vehicle
+     logic touched. */
   return {
     id: user.id,
     name: givenName,
-    first_name: givenName,
     surname: pickText("surname"),
     email: user.email || null,
     account_type:
@@ -229,15 +266,9 @@ function buildAuthoritativeProfileInsert(user){
     phone: pickText("phone"),
     dealership_address: pickText("dealership_address"),
     social_links: metaSocialLinks,
-    mobile_number: pickText("mobile_number"),
-    whatsapp_number: pickText("whatsapp_number"),
-    alternative_contact: pickText("alternative_contact"),
-    bio: pickText("bio"),
-    location: pickText("location"),
-    city: pickText("city"),
     province: pickText("province"),
-    website: pickText("website"),
-    avatar_url: pickText("avatar_url")
+    avatar_url: pickText("avatar_url"),
+    suspended: false
   };
 
 }
@@ -323,27 +354,37 @@ function buildProfileBackfillPatch(profile, user){
             ? meta.name.trim()
             : ""
         );
-    /* PHASE 4 — repair both name columns together from either metadata
-       key, missing-only. Keeps aliases consistent without overwriting
-       established values. */
     if(isMissingProfileValue(current) && incoming){
       patch[column] = incoming;
     }
   };
+  /* PHASE 2 (NEW-DEALERSHIP CONTINUITY) — only REAL public.profiles
+     columns participate in the repair. The payload keys are filtered
+     against this allowlist before the UPDATE is sent, so a single
+     unknown/non-existent column can never make the whole backfill fail
+     with PGRST204 (PostgREST validates keys against the schema cache
+     before RLS) and leave a brand-new dealership row half-populated.
+     profiles.first_name, mobile_number, whatsapp_number, bio, location,
+     city and website do not exist in the live schema — those signup
+     values remain in auth user_metadata and are simply not mirrored. */
+  const PROFILE_REPAIR_COLUMNS = [
+    "name",
+    "surname",
+    "dealership_name",
+    "dealership_email",
+    "phone",
+    "dealership_address",
+    "dealership_logo",
+    "avatar_url",
+    "social_links",
+    "province"
+  ];
   considerName("name");
-  considerName("first_name");
   considerText("surname", "surname");
   considerText("dealership_name", "dealership_name");
   considerText("dealership_email", "dealership_email");
   considerText("phone", "phone");
   considerText("dealership_address", "dealership_address");
-  considerText("mobile_number", "mobile_number");
-  considerText("whatsapp_number", "whatsapp_number");
-  considerText("alternative_contact", "alternative_contact");
-  considerText("bio", "bio");
-  considerText("location", "location");
-  considerText("city", "city");
-  considerText("website", "website");
   considerText("avatar_url", "avatar_url");
   considerText("dealership_logo", "dealership_logo");
   if(
@@ -362,6 +403,11 @@ function buildProfileBackfillPatch(profile, user){
     isCanonicalProvince(meta.province)
   ){
     patch.province = canonicalProvince(meta.province);
+  }
+  for(const key of Object.keys(patch)){
+    if(!PROFILE_REPAIR_COLUMNS.includes(key)){
+      delete patch[key];
+    }
   }
   if(Object.keys(patch).length === 0){
     return null;
@@ -468,16 +514,28 @@ export async function getUserSubscription(){
 
   if(!profile.subscription_id){
 
-    /* PHASE 4 — Launch Promotion is the only package
-       assigned during signup. Accounts created without
-       an explicit subscription therefore resolve to
-       Launch Promotion so the per-account-type limits
-       (private 5 active / 2 featured, dealer 50 / 15)
-       apply. vehicle_limit is a fallback baseline only;
-       the active-listing limit is resolved by account
-       type in the dashboard package-limit logic. */
+    /* PHASE 4 — the SIGNUP-SELECTED package drives this fallback.
+       Signup tags every new account with its chosen plan in auth
+       user_metadata (selected_plan — "Launch Promotion" is the only
+       package currently offered). Accounts created without an
+       explicit subscription therefore resolve to THAT package so
+       the existing per-account-type limits (private 5 active /
+       2 featured, dealer 50 / 15) apply. Accounts predating the
+       signup tag — and any blank metadata value — keep resolving
+       to Launch Promotion, so no existing account changes
+       behaviour. vehicle_limit is a fallback baseline only; the
+       active-listing limit is resolved by account type in the
+       dashboard package-limit logic. */
+    const user =
+    await getAuthUser();
+
+    const metaSelectedPlan =
+    typeof user?.user_metadata?.selected_plan === "string"
+      ? user.user_metadata.selected_plan.trim()
+      : "";
+
     return {
-      name: "Launch Promotion",
+      name: metaSelectedPlan || "Launch Promotion",
       vehicle_limit: 5
     };
   }
@@ -511,6 +569,12 @@ console.warn(
 🔥 AUTH STATE CONTROL (STRICT MODE - FIXED)
 ========================================= */
 
+/* PHASE 1 — last authenticated user id for surgical draft
+isolation. Captured on SIGNED_IN so SIGNED_OUT can purge
+ONLY that user's hufa:draft:* keys. */
+let lastAuthUserId = null;
+
+
 supabase.auth.onAuthStateChange(
 async (event, session) => {
 
@@ -534,6 +598,28 @@ if(!session?.user){
     cachedProfile = null;
     cachedSubscription = null;
 }
+
+  /* PHASE 1 — capture id on sign-in; purge ONLY that
+  user's hufa:draft:* keys on sign-out. */
+  if(session?.user?.id){
+    lastAuthUserId = session.user.id;
+  }
+
+  if(event === "SIGNED_OUT" && lastAuthUserId){
+    purgeUserDrafts(lastAuthUserId);
+    /* PHASE 4 — also purge ONLY that user's IndexedDB
+    Upload Vehicle image draft. Same surgical scope: the
+    record key IS the user id, so no other user's data and
+    no other database is ever touched. */
+    await clearUploadVehicleImageDraft(lastAuthUserId);
+    /* PHASE 6B — also purge ONLY that user's IndexedDB
+    Trade-In image draft. Same surgical scope: the record
+    key IS the user id, so no other user's data and no other
+    database is ever touched. */
+    await clearTradeInImageDraft(lastAuthUserId);
+    lastAuthUserId = null;
+  }
+
 
   /* =====================================
   EMAIL VERIFICATION DETECTION
@@ -597,7 +683,8 @@ console.log(
 
   window.dispatchEvent(
     new CustomEvent(
-      "authChanged"
+      "authChanged",
+      { detail: { event, authenticated: Boolean(session?.user) } }
     )
   );
 
@@ -1190,6 +1277,313 @@ export async function createVehicleInterest({
 }
 
 /* =========================================
+   PHASE 1 — FINANCE APPLICATION TRACKING
+   Records the vehicle page "Apply for Finance"
+   action against the dealership that owns the
+   vehicle.
+
+   - Authenticated buyer: uses the details HUFA
+     already has on the account (name, surname,
+     email, contact number) — nothing is asked.
+   - Guest: the caller passes the minimum contact
+     details collected in the existing HUFA modal
+     (name, surname, email, contact number);
+     user_id stays NULL.
+
+   The dealership ALWAYS comes from the existing
+   vehicle -> seller relationship (vehicles.seller_id),
+   never guessed by the caller.
+   ========================================= */
+
+/* Vehicle lookup used by createFinanceApplication:
+   extended columns first (Phase 1 snapshot fields),
+   base columns as a fallback so a missing optional
+   column can never block recording the application. */
+
+async function loadFinanceVehicle(vehicleId){
+
+  const EXTENDED =
+  "id, seller_id, make, model, variant, year, price, title";
+
+  const BASE =
+  "id, seller_id, make, model, year, price, title";
+
+  async function fetchVehicle(columns){
+
+    try{
+
+      const { data, error } =
+      await supabase
+        .from("vehicles")
+        .select(columns)
+        .eq("id", vehicleId)
+        .single();
+
+      if(error){
+        return null;
+      }
+
+      return data;
+
+    }catch(err){
+      return null;
+    }
+
+  }
+
+  const vehicle = await fetchVehicle(EXTENDED);
+
+  if(vehicle){
+    return vehicle;
+  }
+
+  return await fetchVehicle(BASE);
+
+}
+
+export async function createFinanceApplication({
+
+  vehicleId,
+  userId,
+  name,
+  surname,
+  email,
+  phone,
+  accountType,
+  dealershipName
+
+}){
+
+  /* =====================================
+     SESSION (authenticated submissions only)
+     Same guard as createVehicleInterest: a stale
+     access token would make PostgREST evaluate the
+     INSERT as anon and the row would be rejected by
+     the buyer INSERT policy (42501). Guests have no
+     session and are covered by the guest INSERT
+     policy from the Phase 1 migration instead.
+     ===================================== */
+
+  if(userId){
+
+    let { data:sessionData } =
+    await supabase.auth.getSession();
+
+    if(!sessionData?.session){
+
+      return { error: "LOGIN_REQUIRED" };
+
+    }
+
+    const expiresAtMs =
+    sessionData.session.expires_at
+      ? sessionData.session.expires_at * 1000
+      : null;
+
+    if(
+      expiresAtMs &&
+      Date.now() > expiresAtMs - 60000
+    ){
+
+      const { data:refreshed } =
+      await supabase.auth.refreshSession();
+
+      if(!refreshed?.session){
+
+        return { error: "LOGIN_REQUIRED" };
+
+      }
+
+    }
+
+  }
+
+  /* =====================================
+     VEHICLE — single source of truth for the
+     dealership link AND the recorded vehicle
+     details (make / model / variant / year / price).
+     ===================================== */
+
+  const vehicle =
+  await loadFinanceVehicle(vehicleId);
+
+  if(!vehicle?.seller_id){
+
+    return { error: "VEHICLE_NOT_FOUND" };
+
+  }
+
+  /* =====================================
+     PREVENT DUPLICATES (authenticated)
+     One application per (buyer, vehicle) — the
+     same rule pages/apply.js already uses, checked
+     BEFORE the insert so a re-render or second
+     click can never create a second row. The
+     (user_id, vehicle_id) unique constraint from
+     the migration backstops any race.
+     ===================================== */
+
+  if(userId){
+
+    const { data:existing } =
+    await supabase
+      .from("finance_applications")
+      .select("id")
+      .eq("vehicle_id", vehicleId)
+      .eq("user_id", userId)
+      .limit(1);
+
+    if(existing?.length){
+
+      return { error: "ALREADY_APPLIED" };
+
+    }
+
+  }
+
+  /* =====================================
+     INSERT — the dealership is always copied
+     from vehicles.seller_id (also enforced by
+     the Phase 1 INSERT policies in SQL).
+     ===================================== */
+
+  const payload = {
+
+    user_id: userId || null,
+
+    seller_id: vehicle.seller_id,
+    vehicle_id: vehicle.id,
+
+    vehicle_make: vehicle.make || "",
+    vehicle_model: vehicle.model || "",
+
+    vehicle_title:
+      vehicle.title ||
+      [
+        vehicle.year,
+        vehicle.make,
+        vehicle.model
+      ].filter(Boolean).join(" "),
+
+    vehicle_year: Number(vehicle.year) || null,
+    vehicle_variant: vehicle.variant || null,
+
+    name: name || "",
+    surname: surname || "",
+    email: email || "",
+    phone: phone || "",
+
+    account_type:
+      accountType || (userId ? null : "guest"),
+
+    price: vehicle.price ?? null
+
+  };
+
+  if(dealershipName){
+
+    payload.dealership_name = dealershipName;
+
+  }
+
+  const { error } =
+  await supabase
+    .from("finance_applications")
+    .insert(payload);
+
+  if(error){
+
+    /* Unique (user_id, vehicle_id) backstop — a lost
+       race reads as an already-submitted application. */
+    if(String(error.code) === "23505"){
+
+      return { error: "ALREADY_APPLIED" };
+
+    }
+
+    if(
+      String(error.code) === "PGRST204" ||
+      String(error.code) === "42703"
+    ){
+
+      /* The Phase 1 migration has not been applied yet:
+         the dealership link column (seller_id) does not
+         exist, so this record could never reach the
+         correct dealership. Fail loudly instead of
+         storing a row the dashboard cannot show. */
+      console.error(
+        "finance_applications is missing the Phase 1 columns. " +
+        "Apply supabase/migrations/phase1_finance_application_tracking.sql —",
+        error
+      );
+
+      return { error: "MIGRATION_REQUIRED" };
+
+    }
+
+    console.error("Finance application insert failed:", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint
+    });
+
+    return {
+      error: "INSERT_FAILED",
+      code: error.code || null
+    };
+
+  }
+
+  /* =====================================
+     DEALER NOTIFICATION (existing pattern —
+     the same notifications insert pages/apply.js
+     writes). Best-effort: the application record
+     above is already saved, and the notifications
+     INSERT policy is authenticated-only, so guest
+     submissions deliberately skip it.
+     ===================================== */
+
+  if(userId){
+
+    const { error:notifError } =
+    await supabase
+      .from("notifications")
+      .insert({
+
+        user_id: vehicle.seller_id,
+
+        title: "New Finance Application",
+
+        message:
+        `${name || "A buyer"}${surname ? " " + surname : ""} applied for financing on ${
+          [
+            vehicle.year,
+            vehicle.make,
+            vehicle.model
+          ].filter(Boolean).join(" ") || "a vehicle"
+        }.`
+
+      });
+
+    if(notifError){
+
+      console.warn(
+        "Finance application notification skipped:",
+        notifError
+      );
+
+    }
+
+  }
+
+  return {
+    success: true
+  };
+
+}
+
+/* =========================================
 🔥 MESSAGING HELPERS
 ========================================= */
 
@@ -1750,6 +2144,192 @@ is_read:true
 })
 .eq("user_id", user.id)
 .ilike("title","New Message");
+
+}
+
+/* =========================================
+TRADE-IN NEGOTIATION MESSAGING (Trade-In Centre only)
+-----------------------------------------
+Per-valuation thread: (trade_in_id, valuation_id).
+Reads filter on BOTH columns, oldest -> newest, so one
+valuation's messages never appear in another valuation.
+Graceful when the migration has not run yet: every helper
+returns { migrated:false } instead of throwing, and the
+Trade-In modal shows a notice while offer actions keep
+working. Text messages NEVER touch offer status/amount.
+========================================= */
+
+const TRADE_IN_NEGOTIATION_TABLE =
+"trade_in_negotiation_messages";
+
+function tradeInNegotiationMissingTable(error){
+
+const code = String(error?.code || "");
+const text =
+String(error?.message || error?.details || "").toLowerCase();
+
+return (
+code === "42P01" ||
+text.includes("does not exist") ||
+text.includes("could not find the table") ||
+text.includes("schema cache")
+);
+
+}
+
+function tradeInNegotiationRole(accountType){
+return accountType === "dealer" ? "dealer" : "seller";
+}
+
+export async function getTradeInNegotiationThread({
+tradeInId,
+valuationId,
+markRead = true,
+} = {}){
+
+const user = await getAuthUser();
+if(!user || !tradeInId || !valuationId){
+return { messages: [], migrated: true, unread: 0 };
+}
+
+const { data, error } = await supabase
+.from(TRADE_IN_NEGOTIATION_TABLE)
+.select("*")
+.eq("trade_in_id", tradeInId)
+.eq("valuation_id", String(valuationId))
+.order("created_at", { ascending: true });
+
+if(error){
+if(tradeInNegotiationMissingTable(error)){
+return { messages: [], migrated: false, unread: 0 };
+}
+console.error("Trade-in negotiation fetch failed:", error);
+return { messages: [], migrated: true, unread: 0 };
+}
+
+const messages = Array.isArray(data) ? data : [];
+const unread = messages.filter(
+m => m.sender_id !== user.id && !m.is_read
+).length;
+
+if(markRead && unread){
+const ids = messages
+.filter(m => m.sender_id !== user.id && !m.is_read && m.id)
+.map(m => m.id);
+if(ids.length){
+await supabase
+.from(TRADE_IN_NEGOTIATION_TABLE)
+.update({ is_read: true })
+.in("id", ids);
+messages.forEach(m => {
+if(ids.includes(m.id)){ m.is_read = true; }
+});
+}
+}
+
+return { messages, migrated: true, unread };
+
+}
+
+export async function sendTradeInNegotiationMessage({
+tradeInId,
+valuationId,
+dealerId = null,
+receiverId = null,
+message,
+} = {}){
+
+const user = await getAuthUser();
+if(!user){
+return { error: "LOGIN_REQUIRED" };
+}
+
+const text = String(message || "").trim();
+if(!text){
+return { error: "EMPTY_MESSAGE" };
+}
+if(!tradeInId || !valuationId){
+return { error: "NO_THREAD" };
+}
+
+let senderRole = "seller";
+try{
+const { data: profile } = await supabase
+.from("profiles")
+.select("account_type")
+.eq("id", user.id)
+.single();
+senderRole = tradeInNegotiationRole(profile?.account_type);
+}catch(_){
+senderRole = "seller";
+}
+
+const { data, error } = await supabase
+.from(TRADE_IN_NEGOTIATION_TABLE)
+.insert({
+trade_in_id: tradeInId,
+valuation_id: String(valuationId),
+sender_id: user.id,
+sender_role: senderRole,
+dealer_id: dealerId || null,
+message: text.slice(0, 2000),
+is_read: false,
+})
+.select()
+.single();
+
+if(error){
+if(tradeInNegotiationMissingTable(error)){
+return { error: "NOT_MIGRATED" };
+}
+console.error("Trade-in negotiation send failed:", error);
+return { error: error.message || "SEND_FAILED" };
+}
+
+if(receiverId && receiverId !== user.id){
+try{
+await supabase.from("notifications").insert({
+user_id: receiverId,
+title: "New Trade-In Message",
+message: text.slice(0, 80) || "New negotiation message",
+type: "tradein_negotiation",
+is_read: false,
+});
+}catch(_){
+/* Notifications are best-effort only. */
+}
+}
+
+return { success: true, message: data, migrated: true };
+
+}
+
+export async function getTradeInNegotiationUnread({
+tradeInId,
+valuationId,
+} = {}){
+
+const user = await getAuthUser();
+if(!user || !tradeInId || !valuationId){
+return { unread: 0, migrated: true };
+}
+
+const { data, error } = await supabase
+.from(TRADE_IN_NEGOTIATION_TABLE)
+.select("id")
+.eq("trade_in_id", tradeInId)
+.eq("valuation_id", String(valuationId))
+.neq("sender_id", user.id)
+.eq("is_read", false);
+
+if(error){
+if(tradeInNegotiationMissingTable(error)){
+return { unread: 0, migrated: false };
+}
+return { unread: 0, migrated: true };
+}
+
+return { unread: (data || []).length, migrated: true };
 
 }
 

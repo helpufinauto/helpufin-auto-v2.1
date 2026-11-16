@@ -3,6 +3,7 @@ import { asset } from "../js/basePath.js";
 const PLACEHOLDER = asset("/placeholder.png");
 
 import { renderVehicleCard } from "../components/vehicleCard.js";
+import { getCardDetailLevel } from "../js/cardDetailPreference.js";
 import { supabase } from "../js/api.js";
 import { navigate } from "../js/router.js";
 import { SearchBar } from "../components/searchBar.js";
@@ -128,7 +129,7 @@ to-white
 
   /* Recommended vehicle cards — dense, premium, even column height.
      Scoped to #recommended so Browse/Saved/Compare cards are untouched. */
-  #recommended .vehicle-card > div:first-child{ height:120px !important; width:100%; }
+  #recommended .vehicle-card > div:first-child{ height:120px !important; max-width:240px !important; width:100%; margin:0 auto !important; }
   #recommended .vehicle-card-body{ padding:10px 10px 12px !important; min-width:0; }
   #recommended .vehicle-card-body > div:first-child{ min-height:24px !important; font-size:14px !important; line-height:1.28 !important; }
   #recommended .text-base.font-bold{ font-size:16px !important; }
@@ -154,7 +155,7 @@ to-white
   .home-trust-section{ padding-bottom:12px !important; }
 
   /* 2-column cards — avoid awkward tall expansion on wide tablet rows. */
-  #recommended .vehicle-card > div:first-child{ height:140px !important; width:100%; }
+  #recommended .vehicle-card > div:first-child{ height:140px !important; max-width:240px !important; width:100%; margin:0 auto !important; }
   #recommended .vehicle-card-body{ padding:12px !important; min-width:0; }
   #recommended .vehicle-card-body > div:first-child{ min-height:26px !important; font-size:14px !important; line-height:1.28 !important; }
   #recommended .text-base.font-bold{ font-size:16px !important; }
@@ -448,7 +449,6 @@ to-white
 /* Browse By Brands section — light-blue automotive showroom wallpaper */
 .home-browse-section{
   background-color:transparent !important;
-  background-image:url('${asset("/assets/savedbackground.png?v=2")}') !important;
   background-position:center !important;
   background-size:cover !important;
   background-repeat:no-repeat !important;
@@ -1139,7 +1139,7 @@ RECOMMENDED VEHICLES
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    padding: 6px !important;
+    padding: 0 !important;
     box-sizing: border-box !important;
   }
   #recommended .vehicle-card > div:first-child img {
@@ -1272,7 +1272,7 @@ RECOMMENDED VEHICLES
     gap: 12px !important;
   }
   #recommended .vehicle-card > div:first-child {
-    height: 150px !important;
+    height: 150px !important; max-width:240px !important; margin:0 auto !important;
   }
 }
 </style>
@@ -3947,7 +3947,8 @@ return;
 (list || []).forEach((v)=>{
 
   box.insertAdjacentHTML("beforeend", renderVehicleCard(v, {
-    actions: "none"
+    actions: "none",
+    detailLevel: getCardDetailLevel()
   }));
 
 });
@@ -4408,6 +4409,14 @@ Array.isArray(vehicles)
   const featuredSlides =
   safeVehicles.slice(0, 12);
 
+  const featuredBatches = [];
+
+  for(let i = 0; i < featuredSlides.length; i += 3){
+    featuredBatches.push(
+      featuredSlides.slice(i, i + 3)
+    );
+  }
+
   /* =========================================
      PHASE 2 — DEALERSHIP IDENTITY LOAD
      Batch-fetch the seller profile for every
@@ -4503,7 +4512,27 @@ FEATURED_PROFILE_BASE +
   "
   >
 
-  ${featuredSlides.map((vehicle, slideIndex) => `
+  ${featuredBatches.map((batch, batchIndex) => `
+
+  <div
+  class="
+  w-full
+  min-w-full
+  flex-none
+  "
+  data-featured-batch="${batchIndex}"
+  >
+
+  <div
+  class="
+  flex
+  flex-col
+  gap-4
+  w-full
+  "
+  >
+
+  ${batch.map((vehicle, batchVehicleIndex) => `
 
   <div
   class="
@@ -4553,8 +4582,8 @@ FEATURED_PROFILE_BASE +
   src="${vehicle?.image_url || PLACEHOLDER}"
   width="470"
   height="200"
-  loading="${slideIndex === 0 ? "eager" : "lazy"}"
-  ${slideIndex === 0 ? 'fetchpriority="high"' : ""}
+  loading="${batchIndex * 3 + batchVehicleIndex === 0 ? "eager" : "lazy"}"
+  ${batchIndex * 3 + batchVehicleIndex === 0 ? 'fetchpriority="high"' : ""}
   decoding="async"
   alt="${vehicle?.make || ''} ${vehicle?.model || ''}"
   onerror="this.src='${PLACEHOLDER}'"
@@ -4865,23 +4894,32 @@ FEATURED_PROFILE_BASE +
 
   </div>
 
-  </div>
-
-  </div>
   `).join("")}
 
+  </div>
+
+  </div>
+
+  `).join("")}
+
+  </div>
+
+  ${featuredBatches.length > 1 ? `
+
   <!-- PREV / NEXT ARROWS -->
+
+  <div class="flex justify-center gap-3 mt-2 lg:contents">
 
   <button
   id="featuredPrev"
   class="
-  absolute
-  left-3
-  top-1/2
-  -translate-y-1/2
+  relative lg:absolute
+  left-auto lg:left-[calc(50%-560px)]
+  top-auto lg:top-1/2
+  translate-y-0 lg:-translate-y-1/2
   z-30
-  w-9
-  h-9
+  w-11
+  h-11
   rounded-full
   bg-white/90
   hover:bg-white
@@ -4895,8 +4933,9 @@ FEATURED_PROFILE_BASE +
   hover:text-[#081120]
   transition-all
   duration-300
-  opacity-0
-  group-hover:opacity-100
+  opacity-100
+  md:opacity-0
+  md:group-hover:opacity-100
   "
   aria-label="Previous vehicle"
   >
@@ -4908,13 +4947,13 @@ FEATURED_PROFILE_BASE +
   <button
   id="featuredNext"
   class="
-  absolute
-  right-3
-  top-1/2
-  -translate-y-1/2
+  relative lg:absolute
+  right-auto lg:right-[calc(50%-560px)]
+  top-auto lg:top-1/2
+  translate-y-0 lg:-translate-y-1/2
   z-30
-  w-9
-  h-9
+  w-11
+  h-11
   rounded-full
   bg-white/90
   hover:bg-white
@@ -4928,8 +4967,9 @@ FEATURED_PROFILE_BASE +
   hover:text-[#081120]
   transition-all
   duration-300
-  opacity-0
-  group-hover:opacity-100
+  opacity-100
+  md:opacity-0
+  md:group-hover:opacity-100
   "
   aria-label="Next vehicle"
   >
@@ -4937,6 +4977,12 @@ FEATURED_PROFILE_BASE +
   <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
   </svg>
   </button>
+
+  </div>
+
+  </div>
+
+  ` : ``}
 
   <!-- PAGINATION DOTS -->
 
@@ -4950,7 +4996,7 @@ FEATURED_PROFILE_BASE +
   mt-4
   "
   >
-  ${featuredSlides.map((_, i) => `
+  ${featuredBatches.map((_, i) => `
   <button
   class="
   w-2.5
@@ -4972,10 +5018,6 @@ FEATURED_PROFILE_BASE +
   </div>
 
   `;
-
-  /* ==========================
-     INIT SLIDER
-  ========================== */
 
   initFeaturedSlider();
 
@@ -5075,11 +5117,15 @@ dotButtons[i].className =
 }
 
 function nextSlide(){
+if(featuredIndex < total - 1){
 goToSlide(featuredIndex + 1);
+}
 }
 
 function prevSlide(){
+if(featuredIndex > 0){
 goToSlide(featuredIndex - 1);
+}
 }
 
 /* PREV */
@@ -5211,8 +5257,8 @@ stopAutoPlay();
 window.removeEventListener("resize", onResize);
 };
 
-/* START */
-startAutoPlay();
+/* START (autoplay disabled) */
+// startAutoPlay();
 
 }
 

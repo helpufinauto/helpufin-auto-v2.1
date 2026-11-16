@@ -97,7 +97,7 @@ return `
 
     <p class="mt-3 text-xs text-slate-500">
 
-        Free to use â€¢ No account required â€¢ No credit checks
+        Free to use &bull; No account required &bull; No credit checks
 
     </p>
 
@@ -113,7 +113,7 @@ return `
         <ol class="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
 
             <li class="flex items-center gap-2.5">
-                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#E48A2F] text-xs font-bold text-[#08111F]">âœ“</span>
+                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#E48A2F] text-xs font-bold text-[#08111F]"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
                 <span class="text-sm font-semibold text-[#08111F]">Profile Started</span>
             </li>
 
@@ -339,7 +339,7 @@ return `
 
                                 <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#E48A2F] text-sm font-bold text-[#08111F]">
 
-                                    âœ“
+                                    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
 
                                 </div>
 
@@ -595,7 +595,7 @@ if(Object.keys(answers).length){
 
         if(currentQuestion===0){
 
-            badge.textContent="Step 1 â€¢ Welcome";
+            badge.textContent="Step 1 \u2022 Welcome";
 
             return;
 
@@ -1053,29 +1053,29 @@ if(Object.keys(answers).length){
        ================================================================ */
     function buildMatchReasons(v, answers, priceMax, preferredBody, budgetScore, bodyScore, fuelScore, seatsScore, conditionScore, reasonScore, mileageScore) {
         const reasons = [];
-        if (budgetScore >= 80) reasons.push({ icon: "âœ“", text: "Within your budget", positive: true });
+        if (budgetScore >= 80) reasons.push({ icon: "&#10003;", text: "Within your budget", positive: true });
         else if (budgetScore >= 50) reasons.push({ icon: "~", text: "Slightly above your budget range", positive: false });
-        else if (budgetScore > 0) reasons.push({ icon: "âœ—", text: "Above your preferred budget", positive: false });
+        else if (budgetScore > 0) reasons.push({ icon: "&#10007;", text: "Above your preferred budget", positive: false });
 
-        if (bodyScore >= 80) reasons.push({ icon: "âœ“", text: "Matches your preferred body style", positive: true });
+        if (bodyScore >= 80) reasons.push({ icon: "&#10003;", text: "Matches your preferred body style", positive: true });
         else if (bodyScore >= 50) reasons.push({ icon: "~", text: "Close to your preferred body style", positive: false });
-        else if (bodyScore > 0) reasons.push({ icon: "âœ—", text: "Different body style than preferred", positive: false });
+        else if (bodyScore > 0) reasons.push({ icon: "&#10007;", text: "Different body style than preferred", positive: false });
 
         if (fuelScore >= 80) {
             const fuelLabel = answers[6]==="petrol"?"Petrol":answers[6]==="diesel"?"Diesel":answers[6]==="hybrid"?"Hybrid":"Electric";
-            reasons.push({ icon: "âœ“", text: `${fuelLabel} as requested`, positive: true });
+            reasons.push({ icon: "&#10003;", text: `${fuelLabel} as requested`, positive: true });
         } else if (fuelScore >= 40) reasons.push({ icon: "~", text: "Different fuel type than preferred", positive: false });
-        else if (fuelScore > 0) reasons.push({ icon: "âœ—", text: "Fuel type differs from preference", positive: false });
+        else if (fuelScore > 0) reasons.push({ icon: "&#10007;", text: "Fuel type differs from preference", positive: false });
 
         if (seatsScore >= 80) {
             const seatCount = v.seats || "?";
-            reasons.push({ icon: "âœ“", text: `Seats ${seatCount} passengers`, positive: true });
+            reasons.push({ icon: "&#10003;", text: `Seats ${seatCount} passengers`, positive: true });
         } else if (seatsScore >= 40) reasons.push({ icon: "~", text: "Passenger capacity is close to your need", positive: false });
-        else if (seatsScore > 0) reasons.push({ icon: "âœ—", text: "Seating capacity differs from your need", positive: false });
+        else if (seatsScore > 0) reasons.push({ icon: "&#10007;", text: "Seating capacity differs from your need", positive: false });
 
         if (conditionScore >= 80) {
             const condLabel = v.condition || "Pre-owned";
-            reasons.push({ icon: "âœ“", text: `${condLabel} condition as preferred`, positive: true });
+            reasons.push({ icon: "&#10003;", text: `${condLabel} condition as preferred`, positive: true });
         } else if (conditionScore >= 40) reasons.push({ icon: "~", text: "Condition differs slightly from preference", positive: false });
 
         const lifestyleTexts = {
@@ -1085,7 +1085,7 @@ if(Object.keys(answers).length){
             "adventure":"Capable for adventure"
         };
         if (reasonScore >= 70 && answers[1]) {
-            reasons.push({ icon: "âœ“", text: lifestyleTexts[answers[1]] || "Matches your lifestyle needs", positive: true });
+            reasons.push({ icon: "&#10003;", text: lifestyleTexts[answers[1]] || "Matches your lifestyle needs", positive: true });
         }
 
         if (mileageScore <= 40 && answers[5]) {
@@ -1248,7 +1248,7 @@ if(Object.keys(answers).length){
                             </div>
                         </div>
                         <button data-view-vehicle data-vehicle-id="${v.id}" class="mt-5 inline-flex w-full items-center justify-center rounded-2xl ${v.is_featured ? 'bg-[#E48A2F] hover:bg-[#D67E2C] text-[#08111F]' : 'bg-[#005BBF] hover:bg-[#004FA8] text-white'} px-6 py-4 font-bold transition duration-300">
-                            View Vehicle â†’
+                            View Vehicle &rarr;
                         </button>
                     </div>
                 </div>`;
@@ -1257,7 +1257,7 @@ if(Object.keys(answers).length){
         answerContainer.innerHTML = `
             ${relaxationNotice}
             <div class="mb-4 md:col-span-2 flex items-center justify-between">
-                <p class="text-slate-400 text-sm">${scored.length} ${scored.length > 1 ? 'vehicles' : 'vehicle'} found â€¢ Sorted by match relevance</p>
+                <p class="text-slate-400 text-sm">${scored.length} ${scored.length > 1 ? 'vehicles' : 'vehicle'} found &bull; Sorted by match relevance</p>
             </div>
             <div class="grid gap-6 md:col-span-2 md:grid-cols-2 lg:grid-cols-3">
                 ${resultsCards}
@@ -1356,8 +1356,8 @@ if(Object.keys(answers).length){
             description:"Choose the monthly payment you're most comfortable with.",
             answers:[
                 ["Under R3 000","Lowest monthly commitment.","3000"],
-                ["R3 000 â€“ R6 000","Affordable monthly payments.","6000"],
-                ["R6 000 â€“ R10 000","Mid-range vehicle budget.","10000"],
+                ["R3 000 &ndash; R6 000","Affordable monthly payments.","6000"],
+                ["R6 000 &ndash; R10 000","Mid-range vehicle budget.","10000"],
                 ["Above R10 000","Premium vehicle budget.","10000+"]
             ]
         },

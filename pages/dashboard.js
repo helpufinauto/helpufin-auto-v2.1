@@ -11,6 +11,8 @@ import {
   getAuthUser,
   getInboxConversations,
   resolveLeadConversation,
+  getTradeInNegotiationThread,
+  sendTradeInNegotiationMessage,
   clearAuthCache,
   getVerifiedTotpFactor,
   describeMfaError
@@ -28,6 +30,23 @@ import {
   rejectZipFile
 } from "../js/fileValidation.js";
 import { ensureScript } from "../js/cdnLoader.js";
+import { saveDraft, loadDraft, clearDraft } from "../js/draftStore.js";
+/* PHASE 5B.1G — the SAME shared vehicle catalogue Upload Vehicle
+   uses (js/catalog.js). One catalogue only: no local copy.
+   PHASE 5B.1I — getFeatures() joins this ONE import so the
+   Trade-In Features picker reads the same feature catalogue
+   Upload Vehicle's picker reads (never a second catalogue). */
+import {
+  getFeatures,
+  getMakes,
+  getModels,
+  getVariants
+} from "../js/catalog.js";
+import {
+  saveTradeInImageDraft,
+  loadTradeInImageDraft,
+  clearTradeInImageDraft
+} from "../js/tradeInImageStore.js";
 
 let selectedVehicles = new Set();
 /* =========================================
@@ -649,6 +668,8 @@ loadView('crm');
    that renders through this shell. Runs identically on desktop
    and mobile, on /dashboard* and on standalone pages. */
 setTimeout(()=>{
+  __dashProfileHydrateRetries = 0;
+  __dashDealerIdentityAttempts = 0;
   hydrateDashboardProfile();
   renderFinanceNav();
 }, 0);
@@ -833,7 +854,7 @@ h-10
 flex-shrink-0
 overflow-hidden
 ">
-HA
+<span class="skeleton-shimmer w-6 h-6 rounded-full inline-block"></span>
 </div>
 
 <div class="
@@ -848,7 +869,7 @@ class="
 dashboard-sidebar-name
 truncate
 ">
-Account
+<span class="skeleton-shimmer h-3.5 w-28 rounded inline-block align-middle"></span>
 </p>
 
 <p
@@ -1500,9 +1521,65 @@ return initials || "HA";
 
 }
 
+/* ACCOUNT-HOLDER INITIALS (CORRECTED) — the avatar always
+   represents the ACCOUNT HOLDER, regardless of account type:
+   first name + surname → initials (Dawn Adams → "DA",
+   Coyote Stark → "CS"). The dealership name is a separate
+   business field and NEVER determines the avatar initials.
+   Private sellers keep exactly the same result they always
+   had. "HA" is only ever computeInitials' last-resort value
+   when the account genuinely has no name at all. */
+function dashboardInitials(profile){
+
+if(!profile){
+return "";
+}
+
+return computeInitials(
+profile.first_name || profile.name,
+profile.surname
+);
+
+}
+
 /* ---------- SIDEBAR PROFILE HYDRATION ---------- */
 
 let __dashProfileHydrating = false;
+
+/* PRIVATE SELLER IDENTITY FIX — the first hydrate can run
+   before the auth session / profile row is ready (right
+   after signup → login). Instead of dead-ending on the
+   neutral placeholders (which left the wrong "HA" initials
+   visible and the account type unclear), the loading state
+   is kept and hydration is retried briefly. The budget is
+   reset on every shell render and on success. */
+let __dashProfileHydrateRetries = 0;
+
+const DASH_PROFILE_HYDRATE_MAX_RETRIES = 10;
+const DASH_PROFILE_HYDRATE_RETRY_MS = 500;
+
+/* DEALERSHIP IDENTITY REFRESH BUDGET — used only by the
+   dealer-scoped dealership_name refresh in hydrateDashboardProfile
+   below. Never touched by the private-seller path. */
+let __dashDealerIdentityAttempts = 0;
+const DASH_DEALER_IDENTITY_MAX_ATTEMPTS = 3;
+
+function scheduleDashboardProfileHydrateRetry(){
+
+if(__dashProfileHydrateRetries >= DASH_PROFILE_HYDRATE_MAX_RETRIES){
+return false;
+}
+
+__dashProfileHydrateRetries++;
+
+setTimeout(
+hydrateDashboardProfile,
+DASH_PROFILE_HYDRATE_RETRY_MS
+);
+
+return true;
+
+}
 
 export async function hydrateDashboardProfile(){
 
@@ -1519,15 +1596,31 @@ await getAuthUser();
 
 if(!user){
 
-/* No session — clear the placeholder shimmer
-   but leave the default markup untouched. */
+/* No session YET (transient right after signup →
+   login). Keep the existing skeleton loading state
+   and retry briefly. Only after the bounded budget
+   is exhausted fall back to the previous signed-out
+   terminal state (neutral, never wrong initials). */
+if(scheduleDashboardProfileHydrateRetry()){
+return;
+}
+
 const typeEl =
 document.getElementById(
 "dashboardSidebarType"
 );
 
+const avatarEl =
+document.getElementById(
+"dashboardSidebarAvatar"
+);
+
 if(typeEl){
 typeEl.innerText = "";
+}
+
+if(avatarEl){
+avatarEl.innerText = "";
 }
 
 return;
@@ -1538,8 +1631,49 @@ const profile =
 await getUserProfile();
 
 if(!profile){
+
+/* Profile row still being created/backfilled
+   (transient right after signup). Keep the
+   loading state and retry briefly. */
+scheduleDashboardProfileHydrateRetry();
+
 return;
 }
+
+/* DEALERSHIP DASHBOARD IDENTITY FIX — a dealership account's
+   dashboard initials must come from the SAME authoritative
+   identity Edit Profile uses: profiles.dealership_name on the
+   fresh profiles row. When the profile just read carries no
+   dealership name (a stale api.js cache or a row created
+   before the dealership details were saved), the sidebar
+   would fall back to the ACCOUNT HOLDER'S personal initials
+   (the reported wrong "UL") instead of the dealership
+   identity. Mirror the EXISTING Edit Profile pattern
+   (clearAuthCache() → fresh getUserProfile() with its
+   missing-only metadata backfill) and retry briefly.
+   Dealers only — private sellers never enter this branch.
+   Bounded so a dealership with genuinely no stored name
+   still renders exactly as before. */
+if(
+profile.account_type === "dealer" &&
+!String(profile.dealership_name || "").trim() &&
+__dashDealerIdentityAttempts < DASH_DEALER_IDENTITY_MAX_ATTEMPTS
+){
+
+__dashDealerIdentityAttempts++;
+
+clearAuthCache();
+
+setTimeout(
+hydrateDashboardProfile,
+DASH_PROFILE_HYDRATE_RETRY_MS
+);
+
+return;
+
+}
+
+__dashProfileHydrateRetries = 0;
 
 applyDashboardProfile(profile);
 
@@ -1587,10 +1721,7 @@ if(typeEl){
 
 typeEl.innerText =
 profile.account_type === "dealer"
-? (
-profile.dealership_name ||
-"Dealership"
-)
+? "Dealership"
 : "Private Seller";
 
 }
@@ -1631,10 +1762,7 @@ if(url){
    image. onerror falls back to initials so a
    broken image can never be displayed. */
 window.__DASH_PROFILE_INITIALS__ =
-computeInitials(
-profile.first_name || profile.name,
-profile.surname
-);
+dashboardInitials(profile);
 
 avatar.classList.add("has-photo");
 
@@ -1660,10 +1788,7 @@ avatar.classList.remove("has-photo");
 setDashboardAvatarClickable(avatar, false);
 
 avatar.innerText =
-computeInitials(
-profile.first_name || profile.name,
-profile.surname
-);
+dashboardInitials(profile) || "HA";
 
 }
 
@@ -1910,6 +2035,158 @@ let editProfileRemoveRequested = false;
 let editProfileCurrentAvatarUrl = "";
 let editProfileSaving = false;
 
+/* =========================================
+PHASE 6D — EDIT PROFILE DRAFT PERSISTENCE
+--------------------------------------------------------------------
+Reuses the existing user-scoped draftStore with workflow
+hufa:draft:editProfile:<userId>. Persists only the normal
+text fields that already exist in the Edit Profile modal so
+a refresh or close/re-open does not lose typed work.
+
+Stored fields (exact match to the modal's real inputs):
+  - editProfileName
+  - editProfileSurname
+  - editProfileDealership        (dealer accounts only)
+  - editProfileDealerEmail       (dealer accounts only)
+  - editProfileDealerPhone       (dealer accounts only)
+  - editProfileDealerAddress     (dealer accounts only)
+
+NOT stored (per spec):
+  - password / MFA / session / tokens
+  - avatar File / Blob (editProfilePendingFile,
+    editProfilePendingUrl, editProfileRemoveRequested
+    are intentionally left as in-memory only)
+
+Lifecycle:
+  - restore when modal opens (after prefill)
+  - debounced autosave on input
+  - retain on close
+  - retain on refresh/navigation
+  - clear only after successful save
+  - failed save retains draft
+  - no duplicate listeners (guarded by a flag)
+========================================= */
+
+const EDIT_PROFILE_DRAFT_WORKFLOW = "editProfile";
+
+const EDIT_PROFILE_DRAFT_FIELD_IDS = [
+  "editProfileName",
+  "editProfileSurname",
+  "editProfileDealership",
+  "editProfileDealerEmail",
+  "editProfileDealerPhone",
+  "editProfileDealerAddress"
+];
+
+let editProfileDraftListenerAttached = false;
+let editProfileDraftSaveTimer = null;
+let editProfileDraftSaveScheduled = false;
+
+function editProfileDraftLooksValid(payload){
+  /* loadDraft returns the stored data object directly (not the
+     full record), so validate the payload against the allowlist. */
+  if(!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  for(const key of Object.keys(payload)){
+    if(!EDIT_PROFILE_DRAFT_FIELD_IDS.includes(key)) return false;
+  }
+  for(const id of EDIT_PROFILE_DRAFT_FIELD_IDS){
+    const v = payload[id];
+    if(v !== undefined && v !== null && typeof v !== "string") return false;
+  }
+  return true;
+}
+
+function readEditProfileDraftData(){
+  const data = {};
+  for(const id of EDIT_PROFILE_DRAFT_FIELD_IDS){
+    const el = document.getElementById(id);
+    data[id] = el ? String(el.value || "").trim() : "";
+  }
+  return data;
+}
+
+function applyEditProfileDraftToForm(data){
+  if(!data || typeof data !== "object") return;
+  for(const id of EDIT_PROFILE_DRAFT_FIELD_IDS){
+    const el = document.getElementById(id);
+    if(el && data[id] !== undefined && data[id] !== null){
+      el.value = data[id];
+    }
+  }
+  /* Keep the live preview in sync after restoring text. */
+  if(typeof renderEditProfilePreview === "function"){
+    renderEditProfilePreview();
+  }
+}
+
+async function scheduleEditProfileDraftSave(){
+  if(editProfileDraftSaveScheduled) return;
+  editProfileDraftSaveScheduled = true;
+  if(editProfileDraftSaveTimer) clearTimeout(editProfileDraftSaveTimer);
+  editProfileDraftSaveTimer = setTimeout(async ()=>{
+    editProfileDraftSaveTimer = null;
+    editProfileDraftSaveScheduled = false;
+    try{
+      const data = readEditProfileDraftData();
+      const userId = (await getAuthUser())?.id;
+      if(!userId) return;
+      await saveDraft(
+        EDIT_PROFILE_DRAFT_WORKFLOW,
+        userId,
+        data
+      );
+    }catch(_){
+      /* draftStore unavailable — silently skip */
+    }
+  }, 400);
+}
+
+async function restoreEditProfileDraft(){
+  try{
+    const user = await getAuthUser();
+    if(!user || !user.id) return;
+    /* loadDraft resolves to the stored data object directly. */
+    const payload = await loadDraft(EDIT_PROFILE_DRAFT_WORKFLOW, user.id);
+    if(editProfileDraftLooksValid(payload)){
+      applyEditProfileDraftToForm(payload);
+    }
+  }catch(_){
+    /* draftStore unavailable - fall back to existing prefill */
+  }
+}
+
+async function clearEditProfileDraftAfterSave(){
+  try{
+    const user = await getAuthUser();
+    if(user && user.id){
+      await clearDraft(EDIT_PROFILE_DRAFT_WORKFLOW, user.id);
+    }
+  }catch(_){
+    /* best-effort clear */
+  }
+}
+
+function attachEditProfileDraftListeners(){
+  if(editProfileDraftListenerAttached) return;
+  editProfileDraftListenerAttached = true;
+
+  const inputIds = EDIT_PROFILE_DRAFT_FIELD_IDS.filter((id)=>{
+    return document.getElementById(id) !== null;
+  });
+
+  for(const id of inputIds){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.removeEventListener("input", onEditProfileDraftInput);
+    el.addEventListener("input", onEditProfileDraftInput);
+  }
+}
+
+function onEditProfileDraftInput(){
+  scheduleEditProfileDraftSave();
+}
+
 const EDIT_PROFILE_ALLOWED_TYPES = [
 "image/jpeg",
 "image/jpg",
@@ -2089,7 +2366,7 @@ transition
 }).join("");
 
 window.__EDIT_PROFILE_INITIALS__ =
-computeInitials(firstName, surname);
+dashboardInitials(profile);
 
 document.body.insertAdjacentHTML(
 "beforeend",
@@ -2578,6 +2855,15 @@ Save Changes
 
 renderEditProfilePreview();
 
+/* PHASE 6D — restore any persisted draft text fields
+   after the modal DOM is in place so the restore can
+   find the real inputs. Runs after prefill so the
+   authoritative profile values take precedence when
+   there is no draft; when a draft exists it overwrites
+   what the user last typed. */
+await restoreEditProfileDraft();
+attachEditProfileDraftListeners();
+
 /* PHASE 3 — the MFA section lives in this same
    modal. Reset any stale remove-confirmation
    state, then render the real factor status. */
@@ -2753,6 +3039,10 @@ document.getElementById(
 "editProfileSurname"
 )?.value || "";
 
+/* ACCOUNT-HOLDER INITIALS (CORRECTED) — the preview always shows
+   the ACCOUNT HOLDER'S initials from the live First Name +
+   Surname inputs, for both account types. The dealership name
+   is a separate business field and never affects the avatar. */
 window.__EDIT_PROFILE_INITIALS__ =
 computeInitials(first, surname);
 
@@ -4283,6 +4573,12 @@ clearAuthCache();
 
 await hydrateDashboardProfile();
 
+/* PHASE 6D — clear the persisted draft only after a
+   successful save. Failed saves fall through to the
+   catch block and retain the draft so the user does
+   not lose typed work. */
+await clearEditProfileDraftAfterSave();
+
 closeEditProfileModal();
 
 toast("Profile updated");
@@ -4330,6 +4626,48 @@ btn.innerText = "Save Changes";
 };
 
 export function DashboardPage(){
+
+/* BUG1 — mount the Trade-In Centre loading overlay SYNCHRONOUSLY
+   during render when the saved view is the Trade-In Centre, so a
+   dashboard refresh shows it on the very first paint — before the
+   boot setTimeout, before any profile/view await. Uses only the
+   existing overlay id/classes; loadView's tradeins branch adopts
+   the same overlay into its normal boot (idempotent, no flicker).
+   Declared inline here so it never touches later module bindings. */
+try{
+
+if(
+typeof sessionStorage !== "undefined" &&
+sessionStorage.getItem("dashboardView") === "tradeins" &&
+typeof document !== "undefined" &&
+document.body &&
+!document.getElementById("tradeInCentreLoading")
+){
+
+const earlyOverlay = document.createElement("div");
+earlyOverlay.id = "tradeInCentreLoading";
+earlyOverlay.className = "hufa-publish-overlay hufa-publish-visible";
+earlyOverlay.setAttribute("role","status");
+earlyOverlay.setAttribute("aria-live","polite");
+earlyOverlay.innerHTML = `
+  <div class="hufa-publish-backdrop"></div>
+  <div class="hufa-publish-center">
+    <div class="hufa-publish-card bg-white">
+      <div class="hufa-publish-spinner"></div>
+      <p class="hufa-publish-brand">HUFA</p>
+      <p class="hufa-publish-title">Loading Trade-In Centre</p>
+      <p class="hufa-publish-subtitle">Preparing your Trade-In Centre...</p>
+    </div>
+  </div>`;
+
+document.body.appendChild(earlyOverlay);
+
+document.documentElement.style.overflow = "hidden";
+window.scrollTo(0, 0);
+
+}
+
+}catch(_){}
 
 setTimeout(async () => {
 
@@ -4514,10 +4852,7 @@ if(userType){
 
 userType.innerText =
 profile.account_type === "dealer"
-? (
-profile.dealership_name ||
-"Dealership"
-)
+? "Dealership"
 : "Private Seller";
 
 }
@@ -4548,10 +4883,7 @@ if(topbarSubtext){
 
 topbarSubtext.innerText =
 profile.account_type === "dealer"
-? (
-profile.dealership_name ||
-"Dealership Account"
-)
+? "Dealership"
 : "Private Seller";
 
 }
@@ -4578,7 +4910,7 @@ document.getElementById(
 if(sidebarName){
 
 sidebarName.innerText =
-`${profile.name || ""} ${profile.surname || ""}`
+`${profile.first_name || profile.name || ""} ${profile.surname || ""}`
 .trim() || "User";
 
 }
@@ -4587,22 +4919,25 @@ if(sidebarType){
 
 sidebarType.innerText =
 profile.account_type === "dealer"
-? (
-profile.dealership_name ||
-"Dealership"
-)
+? "Dealership"
 : "Private Seller";
 
 }
 
 if(sidebarAvatar){
 
+/* LOADING-STATE FIX — reuse the SAME account-holder
+   identity logic as applyDashboardProfile
+   (first name + surname initials). Never fabricate
+   "H"/"A" initials when the profile carries no
+   personal name: leave the existing skeleton
+   shimmer untouched in that case. */
 const initials =
-`${(profile.name || "H")[0]}${(profile.surname || "A")[0]}`
-.toUpperCase();
+dashboardInitials(profile);
 
-sidebarAvatar.innerText =
-initials || "HA";
+if(initials){
+sidebarAvatar.innerText = initials;
+}
 
 }
 
@@ -5223,9 +5558,13 @@ alert(
 "Failed to save note"
 );
 
+/* Failed insert retains the lead's draft. */
 return;
 
 }
+
+/* Successful insert clears ONLY this lead's draft entry. */
+await clearCrmNoteDraftForLead(leadId);
 
 await openLeadNotes(leadId);
 await loadCRMNotifications();
@@ -5534,10 +5873,2602 @@ navigate("/dashboard");
 
 };
 
+/* =========================================
+PHASE 6A — TRADE-IN TEXT DRAFT PERSISTENCE
+-----------------------------------------------
+User-scoped text draft for NEW Trade-In requests.
+Draft key: hufa:draft:tradeIn:<userId>
+
+- autosave: debounced (~600ms) via the existing
+  document input binding + the existing card
+  selection functions
+- restore: NEW-request mode only
+- clear: only after a genuinely successful NEW save
+- close / navigation / refresh retain the draft
+- edit mode never reads or writes this draft
+- only the allowlisted text/value fields are stored
+  (no images, files, tokens or session data)
+========================================= */
+
+const TRADE_IN_DRAFT_WORKFLOW = "tradeIn";
+
+const TRADE_IN_DRAFT_FIELD_IDS = [
+"tradeInMake",
+"tradeInModel",
+/* PHASE 5B.1G — Vehicle Details parity fields. ADD-ONLY keys:
+   every previously stored key is kept verbatim, so existing
+   drafts still pass tradeInDraftLooksValid() and restore exactly
+   as before. Variant/custom/search ride the SAME draft store. */
+"tradeInVariant",
+"tradeInCustomModel",
+"tradeInCustomVariant",
+"tradeInVehicleSearch",
+"tradeInYear",
+"tradeInMileage",
+"tradeInRegistration",
+"tradeInCondition",
+"tradeInAccidentHistory",
+"tradeInServiceHistory",
+"tradeInModifications",
+"tradeInMechanicalIssues",
+"tradeInExtras",
+"tradeInPreferences",
+/* PHASE 5B.1I — Features parity. ADD-ONLY key: the selected
+   features ride the SAME draft as a JSON string in the hidden
+   #tradeInFeatures field (the Trade-In twin of Upload Vehicle's
+   hidden #features input). Every previously stored key is kept
+   verbatim, so existing drafts still pass
+   tradeInDraftLooksValid() and restore exactly as before. */
+"tradeInFeatures"
+];
+
+let tradeInDraftSaveTimer = null;
+let tradeInDraftRestoring = false;
+
+function readTradeInDraftData(){
+const data = {};
+for(const id of TRADE_IN_DRAFT_FIELD_IDS){
+const el = document.getElementById(id);
+data[id] = el ? String(el.value || "").trim() : "";
+}
+return data;
+}
+
+function tradeInDraftLooksValid(payload){
+/* loadDraft returns the stored data object directly.
+   Enforce an explicit allowlist: only known keys with
+   string values may be restored. */
+if(!payload || typeof payload !== "object" || Array.isArray(payload)){
+return false;
+}
+for(const key of Object.keys(payload)){
+if(!TRADE_IN_DRAFT_FIELD_IDS.includes(key)){
+return false;
+}
+const value = payload[key];
+if(value !== undefined && value !== null && typeof value !== "string"){
+return false;
+}
+}
+return true;
+}
+
+function refreshTradeInDraftSummary(){
+const make = document.getElementById("tradeInMake");
+const model = document.getElementById("tradeInModel");
+/* PHASE 5B.1G — the summary now also reflects the selected Variant. */
+const variant = document.getElementById("tradeInVariant");
+const year = document.getElementById("tradeInYear");
+const mileage = document.getElementById("tradeInMileage");
+const makeBox = document.getElementById("tradeInSummaryMake");
+const modelBox = document.getElementById("tradeInSummaryModel");
+const variantBox = document.getElementById("tradeInSummaryVariant");
+const yearBox = document.getElementById("tradeInSummaryYear");
+const mileageBox = document.getElementById("tradeInSummaryMileage");
+if(make && makeBox){ makeBox.textContent = make.value || "—"; }
+if(model && modelBox){ modelBox.textContent = model.value || "—"; }
+if(variant && variantBox){ variantBox.textContent = variant.value || "—"; }
+if(year && yearBox){ yearBox.textContent = year.value || "—"; }
+if(mileage && mileageBox){ mileageBox.textContent = mileage.value || "—"; }
+const reviewVehicle = document.getElementById("reviewVehicleSummary");
+if(reviewVehicle && make && model && year){
+reviewVehicle.textContent =
+[make.value, model.value, year.value].filter(Boolean).join(" ") || "—";
+}
+}
+
+function applyTradeInCardSelection(selector, datasetKey, value, handler){
+const trimmed = typeof value === "string" ? value.trim() : "";
+if(!trimmed || typeof handler !== "function"){ return; }
+const cards = document.querySelectorAll(selector);
+for(const card of cards){
+if(card.dataset[datasetKey] === trimmed){
+handler(card);
+return;
+}
+}
+}
+
+async function applyTradeInDraftToForm(data){
+if(!data || typeof data !== "object"){ return; }
+/* Populate the existing text/value controls. */
+for(const id of TRADE_IN_DRAFT_FIELD_IDS){
+const el = document.getElementById(id);
+if(!el){ continue; }
+if(data[id] !== undefined && data[id] !== null){
+el.value = data[id];
+}
+}
+/* Reapply the existing condition / accident / service
+   card selections using the existing functions. */
+applyTradeInCardSelection(
+".trade-condition-card",
+"condition",
+data["tradeInCondition"],
+window.selectTradeInCondition
+);
+applyTradeInCardSelection(
+".trade-accident-card",
+"accident",
+data["tradeInAccidentHistory"],
+window.selectTradeInAccident
+);
+applyTradeInCardSelection(
+".trade-service-card",
+"service",
+data["tradeInServiceHistory"],
+window.selectTradeInService
+);
+/* PHASE 5B.1G — the Make/Model/Variant controls are now shared-
+   catalogue selects: cascade them from the SAME stored draft data
+   BEFORE the existing summary refresh so the summary/review show
+   the restored values. Storage format, validity checks and
+   clear/close behaviour are unchanged. */
+try{
+await applyTradeInVehicleDraftCascade(data);
+}catch(_){
+/* Cascade is best-effort — the summary refresh below always runs */
+}
+
+/* Refresh the existing summary / review UI. */
+refreshTradeInDraftSummary();
+
+/* PHASE 5B.1I — Features parity: the field loop above already
+   restored the hidden #tradeInFeatures JSON string; rebuild the
+   selected chips/grid from it. initTradeInFeatures() has run by
+   this point (it is awaited BEFORE restoreTradeInDraft inside
+   openTradeInModal), so the shared catalogue is loaded and the
+   restored values are filtered against it exactly like Upload
+   Vehicle's draft restore. */
+applyTradeInSelectedFeaturesDraft(data["tradeInFeatures"]);
+}
+
+async function performTradeInDraftSave(){
+const startedSeq = tradeInDraftDiscardSeq;
+try{
+/* Re-check the gates at write time. */
+if(tradeInDraftRestoring){ return; }
+/* PHASE 5B.1M — the Trade-In form is a full dashboard page now, so it
+   lives inside the dashboard main area and leaving the dashboard
+   destroys its DOM. A debounced write that fires after that would read
+   the missing fields as empty strings and blank the stored draft: skip
+   the write instead, so the last saved draft is kept intact. */
+if(!tradeInWorkspaceEl()){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+const user = await getAuthUser();
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+const userId = user && user.id;
+if(!userId){ return; }
+if(tradeInDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+const data = readTradeInDraftData();
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+if(tradeInDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+await saveDraft(TRADE_IN_DRAFT_WORKFLOW, userId, data);
+}catch(_){
+/* draftStore unavailable — silently skip */
+}
+}
+
+function scheduleTradeInDraftSave(){
+/* Never persist while restoring a draft, and never from
+   EDIT mode (edit mode must not touch the new-request draft). */
+if(tradeInDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+if(tradeInDraftSaveTimer){ clearTimeout(tradeInDraftSaveTimer); }
+tradeInDraftSaveTimer = setTimeout(performTradeInDraftSave, 600);
+}
+
+async function flushTradeInDraftSave(isNewRequestClose){
+/* Read the current field values BEFORE the modal DOM is
+   torn down, otherwise an empty form would overwrite the
+   real draft. */
+const wasPending = tradeInDraftSaveTimer !== null;
+if(tradeInDraftSaveTimer){
+clearTimeout(tradeInDraftSaveTimer);
+tradeInDraftSaveTimer = null;
+}
+if(!wasPending){ return; }
+if(tradeInDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+/* BUG2 — a NEW cancel/close is a discard, never a save: without
+   this, flushing here would re-write the draft the close is
+   about to delete. */
+if(isNewRequestClose){ return; }
+/* PHASE 5B.1M — never read a form that is no longer mounted: missing
+   fields read as empty and would blank the stored draft. The
+   close-time flush is unaffected, because closeTradeInModal flushes
+   BEFORE it removes the workspace. */
+if(!tradeInWorkspaceEl()){ return; }
+const data = readTradeInDraftData();
+try{
+const user = await getAuthUser();
+const userId = user && user.id;
+if(!userId){ return; }
+if(tradeInDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+await saveDraft(TRADE_IN_DRAFT_WORKFLOW, userId, data);
+}catch(_){
+/* draftStore unavailable — silently skip */
+}
+}
+
+async function restoreTradeInDraft(){
+/* Only NEW-request drafts are restored. Edit mode must
+   never consume the new-request draft. */
+if(window.editingTradeInIndex !== undefined){ return; }
+tradeInDraftRestoring = true;
+try{
+const user = await getAuthUser();
+if(!user || !user.id){ return; }
+const payload = loadDraft(TRADE_IN_DRAFT_WORKFLOW, user.id);
+if(payload && tradeInDraftLooksValid(payload)){
+await applyTradeInDraftToForm(payload);
+}
+}catch(_){
+/* draftStore unavailable — fall back to empty form */
+}finally{
+tradeInDraftRestoring = false;
+}
+}
+
+/* =========================================
+PHASE 5B.1G — TRADE-IN VEHICLE DETAILS PARITY
+-----------------------------------------------
+Upload Vehicle (pages/uploadVehicle.js) is the SOURCE OF TRUTH.
+This block mirrors its Vehicle Details interactions onto the
+Trade-In form using the SAME shared catalogue (js/catalog.js:
+getMakes / getModels / getVariants). No second catalogue, and no
+schema, submission, image-store, draft-store, refresh/reopen,
+Continue/Cancel, Image Manager, Features, Condition/History or
+Review changes — Variant is UI + summary + draft only, and the
+trade-in payload keeps its exact existing fields.
+========================================= */
+
+function tradeInDetail(id){
+return document.getElementById(id);
+}
+
+/* The "Other / Not Listed" option carries data-trade-other="1".
+   Its VALUE stays "" while the custom input is empty, so the
+   UNCHANGED submission/validation (el.value.trim()) can never
+   receive a raw sentinel — it simply sees "" (incomplete) — and
+   when the custom input has text the option's value/text is
+   synchronised to that text, so .value is ALWAYS the effective
+   human-readable value. */
+function getTradeInOtherOption(sel){
+return sel ? sel.querySelector("option[data-trade-other]") : null;
+}
+
+function tradeInSelectsOther(sel){
+return !!sel && !!sel.selectedOptions &&
+sel.selectedOptions[0] === getTradeInOtherOption(sel);
+}
+
+function tradeInHasOption(sel, value){
+if(!sel || !value){ return false; }
+for(const option of sel.options){
+if(option.value === value){ return true; }
+}
+return false;
+}
+
+function syncTradeInOtherOption(sel, custom){
+const other = getTradeInOtherOption(sel);
+if(!other){ return; }
+if(tradeInSelectsOther(sel)){
+const text = String((custom && custom.value) || "").trim();
+other.value = text;
+other.textContent = text || "Other / Not Listed";
+}else{
+other.value = "";
+other.textContent = "Other / Not Listed";
+}
+}
+
+function toggleTradeInCustomField(sel, custom){
+if(!sel || !custom){ return; }
+if(tradeInSelectsOther(sel)){
+custom.classList.remove("hidden");
+/* Re-sync from the (possibly just-cleared) custom input so the
+   option can never keep a stale value. */
+syncTradeInOtherOption(sel, custom);
+}else{
+custom.classList.add("hidden");
+custom.value = "";
+syncTradeInOtherOption(sel, custom);
+}
+}
+
+function setTradeInSelectValue(sel, value){
+if(!sel){ return; }
+const raw = String(value || "").trim();
+if(!raw){ sel.selectedIndex = 0; return; }
+if(tradeInHasOption(sel, raw)){ sel.value = raw; return; }
+/* Legacy free-text value (existing trade-in data, or a make the
+   catalogue does not list): inject it as a plain option so the
+   stored value still displays and still submits unchanged. */
+const option = document.createElement("option");
+option.value = raw;
+option.textContent = raw;
+sel.appendChild(option);
+sel.value = raw;
+}
+
+function applyTradeInDetailValue(selectId, customId, rawValue, customText){
+const sel = tradeInDetail(selectId);
+const custom = tradeInDetail(customId);
+if(!sel){ return; }
+const raw = String(rawValue || "").trim();
+const text = String(customText || "").trim();
+if(raw && tradeInHasOption(sel, raw)){
+/* Catalogue value — select it and drop any custom text. */
+sel.value = raw;
+if(custom){ custom.value = ""; }
+}else if(raw || text){
+/* Not in the catalogue → the Upload Vehicle custom path:
+   "Other / Not Listed" selected with the text in the custom
+   input, kept in sync on the option itself. */
+const value = raw || text;
+const other = getTradeInOtherOption(sel);
+if(other){
+other.selected = true;
+if(custom){ custom.value = value; }
+syncTradeInOtherOption(sel, custom);
+}else{
+setTradeInSelectValue(sel, value);
+if(custom){ custom.value = ""; }
+}
+}else{
+sel.selectedIndex = 0;
+if(custom){ custom.value = ""; }
+}
+toggleTradeInCustomField(sel, custom);
+}
+/* PHASE 5B.1G FILL HELPERS — Upload Vehicle's fillMakes /
+   populateModelOptions / populateVariantOptions pattern with the
+   Trade-In ids. The Trade-In form has no Vehicle Type field, so
+   the SAME shared catalogue is read unfiltered (no category
+   argument), never a second catalogue. */
+async function fillTradeInMakes(){
+const list = tradeInDetail("tradeInMake");
+if(!list){ return; }
+list.innerHTML = `<option value="">Select Make</option>`;
+const makes = await getMakes();
+makes.forEach(make=>{
+const option = document.createElement("option");
+option.value = make;
+option.textContent = make;
+list.appendChild(option);
+});
+}
+
+function resetTradeInModels(){
+const list = tradeInDetail("tradeInModel");
+if(list){ list.innerHTML = `<option value="">Select Model</option>`; }
+const custom = tradeInDetail("tradeInCustomModel");
+if(custom){ custom.value = ""; custom.classList.add("hidden"); }
+}
+
+function resetTradeInVariants(){
+const list = tradeInDetail("tradeInVariant");
+if(list){ list.innerHTML = `<option value="">Select Variant (Optional)</option>`; }
+const custom = tradeInDetail("tradeInCustomVariant");
+if(custom){ custom.value = ""; custom.classList.add("hidden"); }
+}
+
+function appendTradeInOtherOption(list){
+const other = document.createElement("option");
+other.value = "";
+other.textContent = "Other / Not Listed";
+other.setAttribute("data-trade-other","1");
+list.appendChild(other);
+}
+
+async function fillTradeInModels(){
+resetTradeInModels();
+resetTradeInVariants();
+const make = String((tradeInDetail("tradeInMake") || {}).value || "").trim();
+const list = tradeInDetail("tradeInModel");
+if(!make || !list){ return; }
+const models = await getModels(make);
+models.forEach(model=>{
+const option = document.createElement("option");
+option.value = model;
+option.textContent = model;
+list.appendChild(option);
+});
+/* Upload Vehicle parity: the model list always ends with
+   "Other / Not Listed". */
+appendTradeInOtherOption(list);
+}
+
+async function fillTradeInVariants(){
+resetTradeInVariants();
+const make = String((tradeInDetail("tradeInMake") || {}).value || "").trim();
+const modelSel = tradeInDetail("tradeInModel");
+const model = String((modelSel || {}).value || "").trim();
+if(!make || !model || !modelSel){ return; }
+/* Custom "Other / Not Listed" model → no catalogue variants,
+   exactly like Upload Vehicle's fillVariants(). */
+if(tradeInSelectsOther(modelSel)){ return; }
+const list = tradeInDetail("tradeInVariant");
+if(!list){ return; }
+const variants = await getVariants(make, model);
+variants.forEach(variant=>{
+const option = document.createElement("option");
+option.value = variant;
+option.textContent = variant;
+list.appendChild(option);
+});
+appendTradeInOtherOption(list);
+}
+
+/* One place for the post-interaction refresh: the EXISTING
+   summary/review refresh plus the EXISTING Phase 6A debounced
+   draft save (scheduleTradeInDraftSave itself already guards
+   restore and edit mode). */
+function refreshTradeInVehicleDetailState(){
+refreshTradeInDraftSummary();
+scheduleTradeInDraftSave();
+}
+/* PHASE 5B.1G SEARCH + INIT — Search Vehicle: the same
+   interaction and visual treatment as Upload Vehicle's
+   #vehicleSearch, scoped to the Trade-In ids and driven by the
+   same shared catalogue (no Vehicle Type filter on Trade-In). */
+async function handleTradeInVehicleSearch(){
+const input = tradeInDetail("tradeInVehicleSearch");
+const results = tradeInDetail("tradeInVehicleSearchResults");
+if(!input || !results){ return; }
+const search = input.value.trim().toLowerCase();
+if(search.length < 2){
+results.innerHTML = "";
+results.classList.add("hidden");
+return;
+}
+const makes = await getMakes();
+const matches = [];
+for(const make of makes){
+if(make.toLowerCase().includes(search)){
+matches.push({ make, model:"", variant:"" });
+}
+const models = await getModels(make);
+for(const model of models){
+if(model.toLowerCase().includes(search)){
+matches.push({ make, model, variant:"" });
+}
+const variants = await getVariants(make, model);
+variants.forEach(variant=>{
+if(variant.toLowerCase().includes(search)){
+matches.push({ make, model, variant });
+}
+});
+}
+}
+results.innerHTML = "";
+if(!matches.length){
+results.innerHTML = `
+<div class="px-4 py-3 text-sm text-slate-500">
+No matching vehicles found.
+</div>
+`;
+results.classList.remove("hidden");
+return;
+}
+matches.slice(0,25).forEach(item=>{
+const row = document.createElement("button");
+row.type = "button";
+row.className = "w-full text-left px-4 py-3 hover:bg-slate-100 border-b border-slate-100 transition";
+let title = item.make;
+if(item.model){ title += ` ${item.model}`; }
+if(item.variant){ title += ` ${item.variant}`; }
+row.innerHTML = `
+<div class="font-medium text-slate-800">
+${title}
+</div>
+<div class="text-xs text-slate-500 mt-1">
+${item.make}
+${item.model ? "• " + item.model : ""}
+${item.variant ? "• " + item.variant : ""}
+</div>
+`;
+row.dataset.make = item.make;
+row.dataset.model = item.model;
+row.dataset.variant = item.variant;
+row.onclick = async ()=>{
+results.classList.add("hidden");
+input.value = [item.make, item.model, item.variant].filter(Boolean).join(" ");
+results.innerHTML = "";
+/* Upload Vehicle's suggested-selection flow: set the Make →
+   re-fill the dependent Model list → set the Model → re-fill
+   the dependent Variant list → set the Variant, then the same
+   custom toggles, then refresh summary + draft. */
+setTradeInSelectValue(tradeInDetail("tradeInMake"), item.make);
+await fillTradeInModels();
+applyTradeInDetailValue("tradeInModel","tradeInCustomModel", item.model, "");
+await fillTradeInVariants();
+applyTradeInDetailValue("tradeInVariant","tradeInCustomVariant", item.variant, "");
+refreshTradeInVehicleDetailState();
+};
+results.appendChild(row);
+});
+results.classList.remove("hidden");
+}
+/* PHASE 5B.1G INIT — bound once per modal mount (the modal markup
+   is recreated on every open, so the dataset guard is belt-and-
+   braces). Called inside openTradeInModal BEFORE the existing
+   draft restore, still under the Phase 5B loading overlay. */
+async function initTradeInVehicleDetails(){
+const makeSel = tradeInDetail("tradeInMake");
+const modelSel = tradeInDetail("tradeInModel");
+const variantSel = tradeInDetail("tradeInVariant");
+const customModel = tradeInDetail("tradeInCustomModel");
+const customVariant = tradeInDetail("tradeInCustomVariant");
+const searchInput = tradeInDetail("tradeInVehicleSearch");
+const searchResults = tradeInDetail("tradeInVehicleSearchResults");
+if(!makeSel || makeSel.dataset.tradeInDetailsBound === "1"){ return; }
+makeSel.dataset.tradeInDetailsBound = "1";
+/* Make catalogue — the SAME js/catalog.js source Upload Vehicle
+   uses; Trade-In simply reads it unfiltered. */
+await fillTradeInMakes();
+/* Make → Model → Variant cascade (Upload Vehicle's listeners,
+   Trade-In ids). */
+makeSel.addEventListener("change", async ()=>{
+await fillTradeInModels();
+await fillTradeInVariants();
+refreshTradeInVehicleDetailState();
+});
+if(modelSel){
+modelSel.addEventListener("change", async ()=>{
+toggleTradeInCustomField(modelSel, customModel);
+await fillTradeInVariants();
+refreshTradeInVehicleDetailState();
+});
+}
+if(variantSel){
+variantSel.addEventListener("change", ()=>{
+toggleTradeInCustomField(variantSel, customVariant);
+refreshTradeInVehicleDetailState();
+});
+}
+if(customModel){
+customModel.addEventListener("input", ()=>{
+syncTradeInOtherOption(modelSel, customModel);
+refreshTradeInVehicleDetailState();
+});
+}
+if(customVariant){
+customVariant.addEventListener("input", ()=>{
+syncTradeInOtherOption(variantSel, customVariant);
+refreshTradeInVehicleDetailState();
+});
+}
+/* Search Vehicle — same input / focus / Escape behaviour as
+   Upload Vehicle. The outside-click hide is bound to THIS modal's
+   overlay (removed together with it) instead of document, so
+   reopening the modal never stacks listeners. */
+if(searchInput){
+searchInput.addEventListener("input", handleTradeInVehicleSearch);
+searchInput.addEventListener("focus", handleTradeInVehicleSearch);
+searchInput.addEventListener("keydown", e=>{
+if(e.key === "Escape"){
+searchInput.value = "";
+if(searchResults){
+searchResults.innerHTML = "";
+searchResults.classList.add("hidden");
+}
+refreshTradeInVehicleDetailState();
+}
+});
+const overlay = document.getElementById("tradeInModalOverlay");
+if(overlay){
+overlay.addEventListener("click", e=>{
+if(
+!searchInput.contains(e.target) &&
+!searchResults?.contains(e.target)
+){
+searchResults?.classList.add("hidden");
+}
+});
+}
+}
+}
+
+/* Draft/edit restore: apply the stored Make/Model/Variant through
+   the SAME cascade order (Make → Model → Variant) so each
+   dependent option list exists before its value is set. Unknown
+   stored values are preserved (custom path / injected option), so
+   legacy free-text trade-in data and older drafts keep working. */
+async function applyTradeInVehicleDraftCascade(data){
+const makeSel = tradeInDetail("tradeInMake");
+if(!makeSel || !data){ return; }
+const rawMake = String(data.tradeInMake || "").trim();
+const rawModel = String(data.tradeInModel || "").trim();
+const rawVariant = String(data.tradeInVariant || "").trim();
+const customModel = String(data.tradeInCustomModel || "").trim();
+const customVariant = String(data.tradeInCustomVariant || "").trim();
+
+await fillTradeInMakes();
+setTradeInSelectValue(makeSel, rawMake);
+
+await fillTradeInModels();
+applyTradeInDetailValue("tradeInModel","tradeInCustomModel", rawModel, customModel);
+
+await fillTradeInVariants();
+applyTradeInDetailValue("tradeInVariant","tradeInCustomVariant", rawVariant, customVariant);
+}
+
+/* =========================================
+PHASE 5B.1I — TRADE-IN FEATURES PARITY
+-----------------------------------------------
+Upload Vehicle's Features picker (pages/uploadVehicle.js
+renderFeatureChips) is the SOURCE OF TRUTH. This block mirrors it
+onto the Trade-In form with:
+- the SAME shared feature catalogue (js/catalog.js getFeatures —
+  ONE catalogue, imported above; never a local copy)
+- the SAME feature search input, category tabs, feature buttons,
+  selected-feature chips with remove/deselect, count + hidden-field
+  sync, styling classes and empty-state behaviour
+Selections persist through the EXISTING Trade-In text draft via
+the hidden #tradeInFeatures field (an ADD-ONLY
+TRADE_IN_DRAFT_FIELD_IDS key) — no new storage, no schema, no
+submission, review, condition, photos or Continue/Cancel/Clear
+logic changes beyond the minimum wiring noted at each hook.
+========================================= */
+
+let tradeInFeatureOptions = [];
+let tradeInSelectedFeatures = [];
+let tradeInActiveFeatureCategory = "";
+
+function tradeInFeatureEl(id){
+return document.getElementById(id);
+}
+
+/* Called inside openTradeInModal BEFORE the existing draft restore
+   (the same slot as initTradeInVehicleDetails), so the shared
+   catalogue is loaded and the picker is bound before stored
+   selections are re-applied. Runs for NEW and EDIT mounts; both
+   start from an empty selection (EDIT has no stored features —
+   the trade_in_requests_v2 payload has no features column). */
+async function initTradeInFeatures(){
+const searchEl = tradeInFeatureEl("tradeInFeatureSearch");
+
+tradeInSelectedFeatures = [];
+tradeInActiveFeatureCategory = "";
+
+if(searchEl){
+searchEl.value = "";
+/* The modal markup is recreated on every open, so this listener
+   lives exactly one mount; the dataset guard is belt-and-braces
+   (same pattern as initTradeInVehicleDetails). */
+if(searchEl.dataset.tradeInFeaturesBound !== "1"){
+searchEl.dataset.tradeInFeaturesBound = "1";
+searchEl.addEventListener("input", renderTradeInFeatureChips);
+}
+}
+
+try{
+/* The SAME shared catalogue Upload Vehicle's picker reads. */
+tradeInFeatureOptions = await getFeatures();
+if(!Array.isArray(tradeInFeatureOptions)){
+tradeInFeatureOptions = [];
+}
+}catch(_){
+/* Catalogue unavailable — the picker renders empty and the rest
+   of the Trade-In form is unaffected. */
+tradeInFeatureOptions = [];
+}
+
+renderTradeInFeatureChips();
+}
+
+/* Draft-restore helper (applyTradeInDraftToForm): raw is the
+   stored JSON string from the hidden #tradeInFeatures field.
+   Invalid JSON and non-catalogue values are dropped — the same
+   guard Upload Vehicle applies when its catalogue is loaded. */
+function applyTradeInSelectedFeaturesDraft(raw){
+let restored = [];
+
+if(typeof raw === "string" && raw.trim()){
+try{
+const parsed = JSON.parse(raw);
+if(Array.isArray(parsed)){
+restored = parsed.filter(item=>typeof item === "string");
+}
+}catch(_){
+restored = [];
+}
+}
+
+if(tradeInFeatureOptions.length){
+const valid = new Set(tradeInFeatureOptions.map(f=>f.value));
+restored = restored.filter(item=>valid.has(item));
+}
+
+tradeInSelectedFeatures = [...new Set(restored)];
+tradeInActiveFeatureCategory = "";
+
+renderTradeInFeatureChips();
+}
+
+/* =========================================
+renderTradeInFeatureChips() — Trade-In port of Upload Vehicle's
+renderFeatureChips(). Structure, class names, category tabs,
+search, empty state and count/hidden-field sync are kept
+IDENTICAL; only the ids and state names are Trade-In-scoped
+(#tradeInFeatureSearch / #tradeInFeatureChips /
+#tradeInSelectedFeatureChips / #tradeInFeatureCount /
+#tradeInFeatures → tradeInFeatureOptions, tradeInSelectedFeatures,
+tradeInActiveFeatureCategory).
+========================================= */
+function renderTradeInFeatureChips(){
+
+const container = tradeInFeatureEl("tradeInFeatureChips");
+
+if(!container) return;
+
+container.innerHTML = "";
+
+const selectedContainer = tradeInFeatureEl("tradeInSelectedFeatureChips");
+
+if(selectedContainer){
+
+selectedContainer.innerHTML = "";
+
+if(tradeInSelectedFeatures.length){
+
+selectedContainer.classList.remove("hidden");
+
+tradeInSelectedFeatures
+.slice()
+.sort()
+.forEach(feature=>{
+
+const chip = document.createElement("button");
+
+chip.type = "button";
+
+chip.className =
+"hufa-chip-selected inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#005BBF] text-white text-xs font-semibold shadow-sm hover:bg-[#004FA8] transition";
+
+chip.innerHTML =
+`
+<span>${feature}</span>
+<span class="text-base leading-none">&times;</span>
+`;
+
+chip.onclick = ()=>{
+
+tradeInSelectedFeatures =
+tradeInSelectedFeatures.filter(item=>item!==feature);
+
+renderTradeInFeatureChips();
+
+/* Upload Vehicle schedules its draft save from click listeners
+   bound to the picker containers; the Trade-In draft binder works
+   off field ids, so the EXISTING Phase 6A debounced scheduler is
+   called directly here. It already guards draft restore and EDIT
+   mode, so nothing extra is persisted in either case. */
+scheduleTradeInDraftSave();
+
+};
+
+selectedContainer.appendChild(chip);
+
+});
+
+}else{
+
+selectedContainer.classList.add("hidden");
+
+}
+
+}
+
+const searchTerm =
+(tradeInFeatureEl("tradeInFeatureSearch")?.value || "")
+.toLowerCase()
+.trim();
+
+const groups = {};
+
+tradeInFeatureOptions.forEach(feature=>{
+
+const category = feature.parent || "Other";
+
+if(!groups[category]){
+
+groups[category] = [];
+
+}
+
+groups[category].push(feature);
+
+});
+
+const categories = Object.keys(groups);
+
+/* PHASE 8 (Upload parity) — mobile only: arrange the feature
+   category tabs in alphabetical (A→Z) display order. The sort is
+   gated to ≤767.98px so the desktop/tablet tab strip keeps its
+   catalogue order. */
+if(
+(window.matchMedia &&
+window.matchMedia("(max-width: 767.98px)").matches)
+){
+categories.sort((a,b)=>a.localeCompare(b));
+}
+
+if(
+!tradeInActiveFeatureCategory ||
+!groups[tradeInActiveFeatureCategory]
+){
+tradeInActiveFeatureCategory = categories[0];
+}
+
+const navigation = document.createElement("div");
+
+/* PHASE 1 (Upload parity) — feature category selector:
+   - each tab is shrink-0 so labels can never be compressed or
+     clipped;
+   - clean intentional horizontal scroller (scrollbar + edge
+     treatment handled by the #tradeInFeatureChips CSS rules);
+   - the active tab is scrolled fully into view after render so a
+     partially clipped category is never the resting state. */
+navigation.className =
+"hufa-feature-nav w-full flex overflow-x-auto gap-2 pb-3 mb-5 border-b border-slate-200";
+
+navigation.setAttribute("role","tablist");
+
+categories.forEach(category=>{
+
+const tab = document.createElement("button");
+
+tab.type = "button";
+
+const isActive = category === tradeInActiveFeatureCategory;
+
+tab.className =
+isActive
+? "hufa-tab-active hufa-feature-tab shrink-0 whitespace-nowrap px-5 py-2 rounded-full bg-[#005BBF] text-white text-sm font-semibold shadow-sm ring-2 ring-[#E48A2F]/60"
+: "hufa-tab hufa-feature-tab shrink-0 whitespace-nowrap px-5 py-2 rounded-full border border-slate-200 bg-white text-slate-600 text-sm font-medium hover:border-[#E48A2F] hover:text-[#08111F] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E48A2F]/60";
+
+tab.textContent = category;
+
+if(isActive){
+tab.setAttribute("aria-selected","true");
+}
+
+tab.onclick = ()=>{
+
+tradeInActiveFeatureCategory = category;
+
+renderTradeInFeatureChips();
+
+};
+
+navigation.appendChild(tab);
+
+});
+
+/* Keep the active tab completely visible — never rest on a
+   half-clipped tab. This scrolls ONLY the tab strip itself;
+   scrollIntoView() would also scroll every vertical ancestor and
+   yank the modal/page down to the Features section. */
+requestAnimationFrame(()=>{
+
+const activeTab = navigation.querySelector(".hufa-tab-active");
+
+if(activeTab && typeof navigation.scrollTo === "function"){
+
+try{
+navigation.scrollTo({
+left: Math.max(
+0,
+activeTab.offsetLeft -
+(navigation.clientWidth - activeTab.offsetWidth) / 2
+),
+behavior: "smooth"
+});
+}catch(e){
+try{ navigation.scrollLeft = activeTab.offsetLeft; }catch(_){ /* no-op */ }
+}
+
+}
+
+});
+
+const navigationWrapper = document.createElement("div");
+
+navigationWrapper.className = "w-full";
+
+navigationWrapper.appendChild(navigation);
+
+container.appendChild(navigationWrapper);
+
+const categoriesToRender =
+searchTerm
+? categories
+: [tradeInActiveFeatureCategory];
+
+categoriesToRender.forEach(category=>{
+
+const group = groups[category];
+
+/* Guarded: an unavailable catalogue leaves nothing to render
+   instead of throwing. */
+if(!group) return;
+
+const matchingFeatures = group.filter(feature=>{
+
+if(!searchTerm){
+
+return true;
+
+}
+
+return feature.value
+.toLowerCase()
+.includes(searchTerm);
+
+});
+
+if(
+searchTerm &&
+!matchingFeatures.length
+){
+return;
+}
+
+const wrapper = document.createElement("div");
+
+wrapper.className = "w-full";
+
+if(searchTerm){
+
+const heading = document.createElement("h4");
+
+heading.className = "text-sm font-semibold text-slate-600 mb-3";
+
+heading.textContent = category;
+
+wrapper.appendChild(heading);
+
+}
+
+const grid = document.createElement("div");
+
+grid.className = "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3";
+
+matchingFeatures.forEach(feature=>{
+
+const featureName = feature.value;
+
+const selected = tradeInSelectedFeatures.includes(featureName);
+
+const button = document.createElement("button");
+
+button.type = "button";
+
+button.className =
+selected
+? "hufa-feature-selected w-full px-4 py-2.5 rounded-lg bg-[#E48A2F] text-[#08111F] text-sm font-semibold text-center transition hover:bg-[#d97e22]"
+: "hufa-feature w-full px-4 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-sm font-medium text-center transition hover:border-[#E48A2F] hover:text-[#08111F] hover:bg-orange-50/50";
+
+button.textContent = featureName;
+
+button.onclick = ()=>{
+
+/* Select / deselect toggle — same semantics as Upload Vehicle. */
+if(selected){
+
+tradeInSelectedFeatures =
+tradeInSelectedFeatures.filter(item=>item!==featureName);
+
+}else{
+
+tradeInSelectedFeatures.push(featureName);
+
+}
+
+tradeInSelectedFeatures = [...new Set(tradeInSelectedFeatures)];
+
+renderTradeInFeatureChips();
+
+/* Same debounced draft scheduler as the chip remove handler
+   (guards restore + EDIT mode internally). */
+scheduleTradeInDraftSave();
+
+};
+
+grid.appendChild(button);
+
+});
+
+wrapper.appendChild(grid);
+
+container.appendChild(wrapper);
+
+});
+
+if(
+searchTerm &&
+!container.querySelector("button")
+){
+
+const empty = document.createElement("div");
+
+empty.className = "py-10 text-center text-slate-400";
+
+empty.textContent = "No matching features found.";
+
+container.appendChild(empty);
+
+}
+
+/* Sync the hidden #tradeInFeatures field (the draft source) and the
+   selected counter with the selection just rendered. Upload Vehicle
+   writes both inside its click handlers; centralising the sync here
+   covers every path identically — search, tabs, chips, draft
+   restore and Clear Now. */
+const hidden = tradeInFeatureEl("tradeInFeatures");
+
+if(hidden){
+/* An EMPTY selection is stored as an empty string, never "[]":
+   the Trade-In draft's "has content" check is a plain truthiness
+   test per field (Upload Vehicle's twin check parses
+   selectedFeatures.length instead), so writing "[]" here would
+   make an otherwise empty draft look like a saved draft and flip
+   the Centre CTA to "Continue Trade-In" for a blank form. Both
+   "[]" and "" restore to zero selections. */
+hidden.value = tradeInSelectedFeatures.length
+? JSON.stringify(tradeInSelectedFeatures)
+: "";
+}
+
+const countEl = tradeInFeatureEl("tradeInFeatureCount");
+
+if(countEl){
+countEl.textContent = `${tradeInSelectedFeatures.length} selected`;
+}
+
+}
+
+/* PHASE 5B.1D — TRADE-IN CENTRE CTA + NEW-FORM REFRESH STATE
+-----------------------------------------------
+The two NEW Trade-In state behaviours, built ONLY on what already
+exists:
+- the Centre's primary CTA reads "+ New Trade-In" when no saved
+  NEW draft exists and "Continue Trade-In" when one does;
+- one sessionStorage UI flag (same pattern as the existing
+  "dashboardView" key) remembers that the NEW Trade-In form is
+  open so a browser refresh returns straight to it.
+No new draft storage: draft existence is read through the
+EXISTING Phase 6A loadDraft() and Phase 6B
+loadTradeInImageDraft() only, and the flag holds nothing but the
+owning user id (view state, never draft data).
+========================================= */
+
+const TRADE_IN_CTA_LABEL_NEW = "+ New Trade-In";
+const TRADE_IN_CTA_LABEL_CONTINUE = "Continue Trade-In";
+
+const TRADE_IN_NEW_FORM_OPEN_KEY = "tradeInNewFormOpen";
+
+/* TRUE only when a restorable NEW draft exists for this user: at
+   least one allowlisted text field with content, and/or at least
+   one pending image. Both reads are the existing store reads;
+   neither store is written or changed here. */
+async function hasSavedNewTradeInDraft(userId){
+
+if(typeof userId !== "string" || !userId){ return false; }
+
+try{
+const payload = loadDraft(TRADE_IN_DRAFT_WORKFLOW, userId);
+
+if(payload && tradeInDraftLooksValid(payload)){
+for(const id of TRADE_IN_DRAFT_FIELD_IDS){
+if(String(payload[id] || "").trim()){ return true; }
+}
+}
+}catch(_){
+/* draftStore unavailable — treat as no draft */
+}
+
+try{
+const images = await loadTradeInImageDraft(userId);
+
+if(Array.isArray(images) && images.length){ return true; }
+}catch(_){
+/* image store unavailable — treat as no draft */
+}
+
+return false;
+}
+
+/* PHASE 5B.1D — set when a NEW Trade-In form finishes opening,
+   cleared by closeTradeInModal. Stores ONLY the owning user id so
+   another account signed in on the same tab never inherits it. */
+function setTradeInNewFormOpen(userId){
+try{
+if(userId){
+sessionStorage.setItem(TRADE_IN_NEW_FORM_OPEN_KEY,String(userId));
+}else{
+sessionStorage.removeItem(TRADE_IN_NEW_FORM_OPEN_KEY);
+}
+}catch(_){
+/* sessionStorage unavailable — flag simply not kept */
+}
+}
+
+function getTradeInNewFormOpenUserId(){
+try{
+return sessionStorage.getItem(TRADE_IN_NEW_FORM_OPEN_KEY) || "";
+}catch(_){ return ""; }
+}
+
+/* PHASE 5B.1D — re-evaluate the Centre's primary CTA in place.
+   Called after the Centre renders and after a NEW cancel/close
+   discard, so the Centre shows "+ New Trade-In" once no saved
+   draft remains. Best-effort and never throws: when the Centre
+   (or its customer CTA) is not on screen this is a no-op. */
+async function refreshTradeInCentreCta(){
+try{
+const button = document.getElementById("tradeInPrimaryCta");
+
+if(!button){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+
+const user = await getAuthUser();
+const userId = user && user.id;
+const hasDraft = await hasSavedNewTradeInDraft(userId);
+
+button.textContent = hasDraft
+? TRADE_IN_CTA_LABEL_CONTINUE
+: TRADE_IN_CTA_LABEL_NEW;
+}catch(_){
+/* CTA refresh is best-effort */
+}
+}
+
+async function clearTradeInDraftAfterSave(){
+/* Cancel any in-flight debounced write so a stale timer
+   cannot re-populate the draft we are about to clear. */
+if(tradeInDraftSaveTimer){
+clearTimeout(tradeInDraftSaveTimer);
+tradeInDraftSaveTimer = null;
+}
+try{
+const user = await getAuthUser();
+if(user && user.id){
+await clearDraft(TRADE_IN_DRAFT_WORKFLOW, user.id);
+}
+}catch(_){
+/* best-effort clear */
+}
+}
+
+/* =========================================
+PHASE 6B — TRADE-IN PENDING IMAGE DRAFT
+-----------------------------------------------
+Wires the EXISTING js/tradeInImageStore.js into the
+existing Trade-In image workflow. It persists ONLY the
+pending window.__TRADE_IN_IMAGE_FILES__ File list for a
+NEW request, keyed by the authenticated user id.
+Server-side image URLs used by EDIT mode are never stored.
+
+- restore: NEW request only
+- autosave: debounced (~600ms)
+- flush: on modal close (the draft is never cleared there)
+- clear: only after a genuinely successful NEW submission
+========================================= */
+
+let tradeInImageDraftSaveTimer = null;
+let tradeInImageDraftRestoring = false;
+
+/* BUG3 — mirrors the Upload Vehicle image reference: an empty
+   in-memory list must never wipe the stored record before the
+   restore for THIS modal open has run, and a restore must wait
+   for any in-flight cancel-discard to finish first. */
+let tradeInImageDraftRestoredThisMount = false;
+let tradeInDraftDiscardPromise = null;
+/* BUG2 — discard generation: a text/image save that started
+   before a NEW cancel/close must never re-create the draft the
+   close just deleted. Saves capture this and abort after awaits
+   when it changes. */
+let tradeInDraftDiscardSeq = 0;
+
+/* Rebuilds a real File from one stored image record so the
+   existing preview/upload path keeps working unchanged. */
+function tradeInImageRecordToFile(record){
+
+try{
+
+if(!record || typeof record !== "object"){
+return null;
+}
+
+const bytes =
+record.bytes;
+
+if(
+!bytes ||
+typeof bytes.byteLength !== "number" ||
+!bytes.byteLength
+){
+return null;
+}
+
+return new File(
+[bytes],
+typeof record.name === "string" && record.name
+? record.name
+: "image",
+{
+type:
+typeof record.type === "string"
+? record.type
+: "",
+lastModified:
+typeof record.lastModified === "number" &&
+record.lastModified > 0
+? record.lastModified
+: Date.now()
+}
+);
+
+}catch(e){
+return null;
+}
+
+}
+
+/* PHASE 5B.1B — TRADE-IN IMAGE MANAGER
+   Mirrors Upload Vehicle's image interaction while retaining the
+   existing Trade-In File[] contract and tradeInImageStore lifecycle. */
+const TRADE_IN_MAX_IMAGES = 10;
+const TRADE_IN_MAX_FILE_SIZE = 10 * 1024 * 1024;
+const TRADE_IN_ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp"
+];
+
+let tradeInImageObjectUrls = [];
+let tradeInImagePreviewUrls = [];
+
+function getTradeInImageFiles(){
+  if(!Array.isArray(window.__TRADE_IN_IMAGE_FILES__)){
+    window.__TRADE_IN_IMAGE_FILES__ = [];
+  }
+  return window.__TRADE_IN_IMAGE_FILES__;
+}
+
+function getTradeInExistingImages(){
+  return Array.isArray(window.__TRADE_IN_IMAGES__)
+    ? window.__TRADE_IN_IMAGES__
+    : [];
+}
+
+function clearTradeInImageObjectUrls(){
+  for(const url of tradeInImageObjectUrls){
+    try{ URL.revokeObjectURL(url); }catch(_){}
+  }
+  tradeInImageObjectUrls = [];
+}
+
+function makeTradeInImageObjectUrl(file){
+  if(typeof URL === "undefined" || typeof URL.createObjectURL !== "function"){
+    return "";
+  }
+  const url = URL.createObjectURL(file);
+  tradeInImageObjectUrls.push(url);
+  return url;
+}
+
+function updateTradeInImageChrome(existingImages, files){
+  const totalImages = existingImages.length + files.length;
+  const countBox = document.getElementById("tradeInImageCount");
+  if(countBox){
+    countBox.textContent =
+      `${totalImages} / ${TRADE_IN_MAX_IMAGES} photos selected`;
+  }
+
+  const reviewImages = document.getElementById("reviewImageCount");
+  if(reviewImages){
+    reviewImages.textContent = `${totalImages} Photos`;
+  }
+
+  const badgeCount = document.getElementById("tradeInImageBadgeCount");
+  if(badgeCount){
+    badgeCount.textContent =
+      `${totalImages} ${totalImages === 1 ? "Photo" : "Photos"}`;
+  }
+
+  const remaining = document.getElementById("tradeInImageRemaining");
+  if(remaining){
+    remaining.textContent =
+      `${Math.max(0, TRADE_IN_MAX_IMAGES - totalImages)} image slots remaining`;
+  }
+
+  const dropZone = document.getElementById("tradeInImageDropZone");
+  const limitMessage = document.getElementById("tradeInImageLimitMessage");
+  dropZone?.classList.toggle("hidden", totalImages >= TRADE_IN_MAX_IMAGES);
+  limitMessage?.classList.toggle("hidden", totalImages < TRADE_IN_MAX_IMAGES);
+  return totalImages;
+}
+
+function updateTradeInSummaryImage(firstUrl){
+  const summaryImage = document.getElementById("tradeInSummaryImage");
+  if(!summaryImage){ return; }
+  summaryImage.src = firstUrl || PLACEHOLDER;
+  summaryImage.alt = firstUrl ? "Vehicle Photo" : "Vehicle Photo Placeholder";
+  summaryImage.onerror = ()=>{
+    summaryImage.onerror = null;
+    summaryImage.src = PLACEHOLDER;
+  };
+}
+
+function bindTradeInImageDropZone(){
+  const drop = document.getElementById("tradeInImageDropZone");
+  const input = document.getElementById("tradeInImages");
+  if(!drop || !input || drop.dataset.tradeInBound === "1"){ return; }
+
+  drop.dataset.tradeInBound = "1";
+  drop.addEventListener("click", ()=> input.click());
+  drop.addEventListener("keydown", (e)=>{
+    if(e.key === "Enter" || e.key === " "){
+      e.preventDefault();
+      input.click();
+    }
+  });
+
+  const stopDefault = (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const visualOn = ()=> drop.classList.add("hufa-dropzone--dragover");
+  const visualOff = ()=> drop.classList.remove("hufa-dropzone--dragover");
+
+  drop.addEventListener("dragover", (e)=>{
+    stopDefault(e);
+    visualOn();
+  });
+  drop.addEventListener("dragenter", (e)=>{
+    stopDefault(e);
+    visualOn();
+  });
+  drop.addEventListener("dragleave", (e)=>{
+    stopDefault(e);
+    visualOff();
+  });
+  drop.addEventListener("dragend", visualOff);
+  drop.addEventListener("drop", (e)=>{
+    stopDefault(e);
+    visualOff();
+    handleTradeInImageFiles(e.dataTransfer?.files);
+  });
+}
+
+async function handleTradeInImageFiles(fileList){
+  if(!document.getElementById("tradeInImagePreview")){ return; }
+
+  const files = getTradeInImageFiles();
+  const existingImages = getTradeInExistingImages();
+  const incoming = Array.from(fileList || []);
+
+  for(const file of incoming){
+    if(window.__TRADE_IN_IMAGE_FILES__ !== files){ return; }
+
+    if(existingImages.length + files.length >= TRADE_IN_MAX_IMAGES){
+      toast(`Maximum ${TRADE_IN_MAX_IMAGES} photos allowed`);
+      break;
+    }
+
+    if(!TRADE_IN_ALLOWED_IMAGE_TYPES.includes(file.type)){
+      toast(`${file.name}: only JPG, PNG and WEBP images are allowed`);
+      continue;
+    }
+
+    const validation = await validateImageFile(file, {
+      maxSize: TRADE_IN_MAX_FILE_SIZE,
+      allowedTypes: TRADE_IN_ALLOWED_IMAGE_TYPES
+    });
+
+    if(window.__TRADE_IN_IMAGE_FILES__ !== files){ return; }
+    if(!validation.ok){
+      toast(validation.error);
+      continue;
+    }
+
+    if(file.size > TRADE_IN_MAX_FILE_SIZE){
+      toast(`${file.name} exceeds the 10MB limit`);
+      continue;
+    }
+
+    const exists = files.some(existing =>
+      existing.name === file.name &&
+      existing.size === file.size &&
+      existing.lastModified === file.lastModified
+    );
+    if(!exists){ files.push(file); }
+  }
+
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+}
+
+function setTradeInImagePosition(from, to){
+  const files = getTradeInImageFiles();
+  if(
+    !Number.isInteger(from) ||
+    !Number.isInteger(to) ||
+    from < 0 || to < 0 ||
+    from >= files.length ||
+    to >= files.length ||
+    from === to
+  ){
+    return;
+  }
+
+  const [file] = files.splice(from, 1);
+  files.splice(to, 0, file);
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+}
+
+window.moveTradeInImage = (index, direction)=>{
+  const files = getTradeInImageFiles();
+  const target = index + direction;
+  if(target < 0 || target >= files.length){ return; }
+
+  [files[target], files[index]] = [files[index], files[target]];
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+};
+
+window.makeTradeInCover = (index)=>{
+  const files = getTradeInImageFiles();
+  if(index <= 0 || index >= files.length){ return; }
+
+  const [file] = files.splice(index, 1);
+  files.unshift(file);
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+};
+
+window.removeTradeInImage = (index)=>{
+  const files = getTradeInImageFiles();
+  if(index < 0 || index >= files.length){ return; }
+  if(!confirm("Remove this image?")){ return; }
+
+  files.splice(index, 1);
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+};
+
+window.replaceTradeInImage = (index)=>{
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = TRADE_IN_ALLOWED_IMAGE_TYPES.join(",");
+  input.onchange = async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file){ return; }
+
+    const validation = await validateImageFile(file, {
+      maxSize: TRADE_IN_MAX_FILE_SIZE,
+      allowedTypes: TRADE_IN_ALLOWED_IMAGE_TYPES
+    });
+    if(!validation.ok){
+      toast(validation.error);
+      return;
+    }
+
+    const files = getTradeInImageFiles();
+    if(index < 0 || index >= files.length){ return; }
+    files[index] = file;
+    renderTradeInImagePreview();
+    scheduleTradeInImageDraftSave();
+  };
+  input.click();
+};
+
+window.removeTradeInExistingImage = (index)=>{
+  const existingImages = getTradeInExistingImages();
+  if(index < 0 || index >= existingImages.length){ return; }
+  if(!confirm("Remove this image?")){ return; }
+
+  existingImages.splice(index, 1);
+  renderTradeInImagePreview();
+  scheduleTradeInImageDraftSave();
+};
+
+window.replaceTradeInExistingImage = (index)=>{
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = TRADE_IN_ALLOWED_IMAGE_TYPES.join(",");
+  input.onchange = async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file){ return; }
+
+    const validation = await validateImageFile(file, {
+      maxSize: TRADE_IN_MAX_FILE_SIZE,
+      allowedTypes: TRADE_IN_ALLOWED_IMAGE_TYPES
+    });
+    if(!validation.ok){
+      toast(validation.error);
+      return;
+    }
+
+    const existingImages = getTradeInExistingImages();
+    if(index < 0 || index >= existingImages.length){ return; }
+    existingImages.splice(index, 1);
+    getTradeInImageFiles().push(file);
+    renderTradeInImagePreview();
+    scheduleTradeInImageDraftSave();
+  };
+  input.click();
+};
+
+window.openTradeInImagePreview = (index)=>{
+  const images = tradeInImagePreviewUrls.slice();
+  if(!images[index]){ return; }
+  window.openTradeInGallery(images, index);
+};
+
+function bindTradeInImagePreviewDragDrop(box){
+  if(!box || box.dataset.tradeInDndBound === "1"){ return; }
+  box.dataset.tradeInDndBound = "1";
+  let dragFromIndex = null;
+
+  const clearTarget = ()=> box.querySelectorAll(".trade-in-image-slot--drop-target")
+    .forEach((el)=> el.classList.remove("trade-in-image-slot--drop-target"));
+  const clearDragging = ()=> box.querySelectorAll(".trade-in-image-slot--dragging")
+    .forEach((el)=> el.classList.remove("trade-in-image-slot--dragging"));
+  const endDrag = ()=>{
+    dragFromIndex = null;
+    clearTarget();
+    clearDragging();
+  };
+
+  box.addEventListener("dragstart", (e)=>{
+    const card = e.target.closest("[data-trade-in-image-index]");
+    if(!card){ return; }
+    dragFromIndex = Number(card.dataset.tradeInImageIndex);
+    if(!Number.isInteger(dragFromIndex)){ dragFromIndex = null; return; }
+    e.stopPropagation();
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(dragFromIndex));
+    card.classList.add("trade-in-image-slot--dragging");
+  });
+
+  box.addEventListener("dragover", (e)=>{
+    const card = e.target.closest("[data-trade-in-image-index]");
+    if(dragFromIndex !== null && card){
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      clearTarget();
+      card.classList.add("trade-in-image-slot--drop-target");
+      return;
+    }
+    if(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")){
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+
+  box.addEventListener("drop", (e)=>{
+    const card = e.target.closest("[data-trade-in-image-index]");
+    if(dragFromIndex !== null && card){
+      e.preventDefault();
+      e.stopPropagation();
+      clearTarget();
+      const to = Number(card.dataset.tradeInImageIndex);
+      if(Number.isInteger(to)){ setTradeInImagePosition(dragFromIndex, to); }
+      dragFromIndex = null;
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    endDrag();
+  });
+
+  box.addEventListener("dragend", endDrag);
+  box.addEventListener("dragleave", (e)=>{
+    if(dragFromIndex !== null && !box.contains(e.relatedTarget)){
+      clearTarget();
+    }
+  });
+}
+
+function renderTradeInImagePreview(){
+
+  const preview =
+  document.getElementById(
+    "tradeInImagePreview"
+  );
+
+  if(!preview){
+    return;
+  }
+
+  const files = getTradeInImageFiles();
+  const existingImages = getTradeInExistingImages();
+
+  /* Object URLs are preview-only; the File objects remain the
+     canonical pending state and are the only thing persisted. */
+  clearTradeInImageObjectUrls();
+  tradeInImagePreviewUrls = [];
+  preview.innerHTML = "";
+
+  const totalImages = updateTradeInImageChrome(
+    existingImages,
+    files
+  );
+
+  if(!totalImages){
+    preview.innerHTML = `
+      <div class="trade-in-image-empty col-span-full">
+        <div class="trade-in-image-empty-title">
+          No vehicle photos yet
+        </div>
+        <div class="trade-in-image-empty-copy">
+          Add up to 10 photos. The first photo is your cover image.
+        </div>
+      </div>
+    `;
+    updateTradeInSummaryImage("");
+    bindTradeInImageDropZone();
+    return;
+  }
+
+  existingImages.forEach((image,index)=>{
+    const overallIndex = index;
+    const isFirst = overallIndex === 0;
+    const safeImage = escapeHtmlAttr(image);
+
+    tradeInImagePreviewUrls.push(image);
+
+    preview.insertAdjacentHTML(
+      "beforeend",
+      `
+      <article class="trade-in-image-slot hufa-image-slot">
+        <div class="trade-in-image-frame">
+          <img
+            src="${safeImage}"
+            alt="Vehicle photo ${overallIndex + 1}"
+            loading="lazy"
+            class="w-full h-40 object-cover cursor-pointer"
+            draggable="false"
+            onclick="openTradeInImagePreview(${overallIndex})"
+          >
+          <span class="trade-in-image-position" aria-hidden="true">${overallIndex + 1}</span>
+          ${isFirst
+            ? `<span class="trade-in-image-cover">Cover</span>`
+            : ""
+          }
+        </div>
+        <div class="grid grid-cols-2 gap-2 p-2.5 bg-white border-t border-slate-100">
+          <button
+            type="button"
+            class="btn btn-clean btn-sm !py-1.5"
+            aria-label="Replace image ${overallIndex + 1}"
+            onclick="replaceTradeInExistingImage(${index})"
+          >Replace</button>
+          <button
+            type="button"
+            class="btn btn-sm !py-1.5 text-red-600 bg-white border border-red-200 hover:bg-red-50"
+            aria-label="Remove image ${overallIndex + 1}"
+            onclick="removeTradeInExistingImage(${index})"
+          >Remove</button>
+        </div>
+      </article>
+      `
+    );
+  });
+
+  files.forEach((file,index)=>{
+    const objectUrl = makeTradeInImageObjectUrl(file);
+    const previewUrl = objectUrl || PLACEHOLDER;
+    const overallIndex = existingImages.length + index;
+    const isFirst = overallIndex === 0;
+    const safeUrl = escapeHtmlAttr(previewUrl);
+
+    tradeInImagePreviewUrls.push(previewUrl);
+
+    preview.insertAdjacentHTML(
+      "beforeend",
+      `
+      <article
+        class="trade-in-image-slot hufa-image-slot"
+        data-trade-in-image-index="${index}"
+      >
+        <div class="trade-in-image-frame">
+          <img
+            src="${safeUrl}"
+            alt="Vehicle photo ${overallIndex + 1}"
+            loading="lazy"
+            class="w-full h-40 object-cover cursor-pointer"
+            draggable="false"
+            onclick="openTradeInImagePreview(${overallIndex})"
+          >
+          <span class="trade-in-image-position" aria-hidden="true">${overallIndex + 1}</span>
+          ${isFirst
+            ? `<span class="trade-in-image-cover">Cover</span>`
+            : ""
+          }
+          ${index > 0
+            ? `<button
+                type="button"
+                class="trade-in-image-move trade-in-image-move-left"
+                aria-label="Move image ${overallIndex + 1} earlier"
+                onclick="moveTradeInImage(${index},-1)"
+              >&#8249;</button>`
+            : ""
+          }
+          ${index < files.length - 1
+            ? `<button
+                type="button"
+                class="trade-in-image-move trade-in-image-move-right"
+                aria-label="Move image ${overallIndex + 1} later"
+                onclick="moveTradeInImage(${index},1)"
+              >&#8250;</button>`
+            : ""
+          }
+        </div>
+        <div class="p-2.5 bg-white border-t border-slate-100">
+          ${isFirst
+            ? `<span class="btn btn-sm !py-1.5 btn-clean w-full trade-in-image-cover-static">Cover</span>`
+            : `<button
+                type="button"
+                class="btn btn-clean btn-sm !py-1.5 w-full"
+                aria-label="Set image ${overallIndex + 1} as cover"
+                onclick="makeTradeInCover(${index})"
+              >Make Cover</button>`
+          }
+        </div>
+        <div class="grid grid-cols-2 gap-2 px-2.5 pb-2.5 bg-white">
+          <button
+            type="button"
+            class="btn btn-clean btn-sm !py-1.5"
+            aria-label="Replace image ${overallIndex + 1}"
+            onclick="replaceTradeInImage(${index})"
+          >Replace</button>
+          <button
+            type="button"
+            class="btn btn-sm !py-1.5 text-red-600 bg-white border border-red-200 hover:bg-red-50"
+            aria-label="Remove image ${overallIndex + 1}"
+            onclick="removeTradeInImage(${index})"
+          >Remove</button>
+        </div>
+      </article>
+      `
+    );
+  });
+
+  preview.querySelectorAll(
+    "[data-trade-in-image-index]"
+  ).forEach((slot)=>{
+    slot.setAttribute("draggable", "true");
+    slot.querySelector("img")?.setAttribute("draggable", "false");
+  });
+
+  bindTradeInImagePreviewDragDrop(preview);
+  bindTradeInImageDropZone();
+  updateTradeInSummaryImage(
+    tradeInImagePreviewUrls[0] || ""
+  );
+}
+
+
+async function performTradeInImageDraftSave(){
+
+const startedSeq = tradeInDraftDiscardSeq;
+
+try{
+
+if(tradeInImageDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+
+const files =
+window.__TRADE_IN_IMAGE_FILES__ || [];
+
+if(!Array.isArray(files)){ return; }
+
+/* BUG3 — mirrors the Upload Vehicle flush guard: an empty
+   in-memory list before this mount restored means init, not
+   a deletion — never let it wipe the stored record. */
+if(!files.length && !tradeInImageDraftRestoredThisMount){ return; }
+
+const user =
+await getAuthUser();
+
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+
+const userId =
+user && user.id;
+
+if(!userId){ return; }
+
+if(tradeInImageDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+
+await saveTradeInImageDraft(userId, files);
+
+}catch(_){
+/* IndexedDB unavailable — the in-memory flow continues. */
+}
+
+}
+
+function scheduleTradeInImageDraftSave(){
+
+/* Never persist while restoring, and never from EDIT mode. */
+if(tradeInImageDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+
+if(tradeInImageDraftSaveTimer){
+clearTimeout(tradeInImageDraftSaveTimer);
+}
+
+tradeInImageDraftSaveTimer =
+setTimeout(
+performTradeInImageDraftSave,
+600
+);
+
+}
+
+async function flushTradeInImageDraftSave(isNewRequestClose){
+
+const wasPending =
+tradeInImageDraftSaveTimer !== null;
+
+if(tradeInImageDraftSaveTimer){
+clearTimeout(tradeInImageDraftSaveTimer);
+tradeInImageDraftSaveTimer = null;
+}
+
+if(!wasPending){ return; }
+if(tradeInImageDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+
+/* BUG2 — a NEW cancel/close is a discard, never a save: without
+   this, flushing here would re-write the draft the close is
+   about to delete. */
+if(isNewRequestClose){ return; }
+
+const startedSeq = tradeInDraftDiscardSeq;
+
+/* Snapshot the current pending Files BEFORE the modal (and the
+   global array) are torn down. */
+const files =
+window.__TRADE_IN_IMAGE_FILES__ || [];
+
+if(!Array.isArray(files)){ return; }
+
+/* BUG3 — same empty-write guard as the debounced path: only a
+   mount that restored first may persist an empty list. */
+if(!files.length && !tradeInImageDraftRestoredThisMount){ return; }
+
+try{
+
+const user =
+await getAuthUser();
+
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+
+const userId =
+user && user.id;
+
+if(!userId){ return; }
+
+if(tradeInImageDraftRestoring){ return; }
+if(window.editingTradeInIndex !== undefined){ return; }
+if(startedSeq !== tradeInDraftDiscardSeq){ return; }
+
+await saveTradeInImageDraft(userId, files);
+
+}catch(_){
+/* IndexedDB unavailable — the in-memory flow continues. */
+}
+
+}
+
+async function restoreTradeInImageDraft(){
+
+/* Only NEW Trade-In requests restore the pending image draft.
+   EDIT mode keeps its own server-side image list untouched. */
+if(window.editingTradeInIndex !== undefined){ return; }
+
+/* BUG2+BUG3 — sequence this restore behind any in-flight
+   cancel-discard, and never let two restores double-load or
+   overwrite files the user already added this mount (Upload
+   Vehicle reference). */
+if(tradeInImageDraftRestoring){ return; }
+
+if(tradeInDraftDiscardPromise){
+
+try{ await tradeInDraftDiscardPromise; }catch(_){}
+
+}
+
+if(
+(window.__TRADE_IN_IMAGE_FILES__ || []).length ||
+tradeInImageDraftRestoredThisMount
+){
+return;
+}
+
+tradeInImageDraftRestoring = true;
+
+try{
+
+const user =
+await getAuthUser();
+
+const userId =
+user && user.id;
+
+if(!userId){ return; }
+
+const records =
+await loadTradeInImageDraft(userId);
+
+if(
+(window.__TRADE_IN_IMAGE_FILES__ || []).length ||
+tradeInImageDraftRestoredThisMount
+){
+return;
+}
+
+if(!Array.isArray(records) || !records.length){ return; }
+
+const files = [];
+
+for(const record of records){
+
+const file =
+tradeInImageRecordToFile(record);
+
+if(file){
+files.push(file);
+}
+
+}
+
+if(!files.length){ return; }
+
+if(
+(window.__TRADE_IN_IMAGE_FILES__ || []).length ||
+tradeInImageDraftRestoredThisMount
+){
+return;
+}
+
+window.__TRADE_IN_IMAGE_FILES__ = files;
+
+/* Only mounts that restored may later persist an empty list. */
+tradeInImageDraftRestoredThisMount = true;
+
+/* Render through the existing preview path. */
+renderTradeInImagePreview();
+
+}catch(_){
+/* IndexedDB unavailable — the empty form is unchanged. */
+}finally{
+tradeInImageDraftRestoring = false;
+}
+
+}
+
+/* PHASE 5B — flush a still-pending image write during refresh/tab
+   close. This is persistence-only: it does not reopen or alter the
+   existing Trade-In refresh-state flow. */
+window.addEventListener(
+  "pagehide",
+  ()=>{
+    flushTradeInImageDraftSave();
+  }
+);
+
+async function clearTradeInImageDraftAfterSave(){
+
+/* Cancel any in-flight debounced write so a stale timer cannot
+   re-populate the draft we are about to clear. */
+if(tradeInImageDraftSaveTimer){
+clearTimeout(tradeInImageDraftSaveTimer);
+tradeInImageDraftSaveTimer = null;
+}
+
+try{
+
+const user =
+await getAuthUser();
+
+if(user && user.id){
+await clearTradeInImageDraft(user.id);
+}
+
+}catch(_){
+/* best-effort clear */
+}
+
+}
+
+/* Inline HTML attribute handlers run in global scope, so the
+   debounced image save is exposed through ONE narrow global
+   hook. No extra listeners are attached. */
+window.__TRADE_IN_IMAGE_DRAFT_TOUCH__ =
+scheduleTradeInImageDraftSave;
+
+/* =========================================
+PHASE 5B — TRADE-IN CENTRE DRAFT STATE
+----------------------------------------------
+The EXISTING Upload Vehicle loading pattern, applied to the
+Trade-In Centre only:
+- the loading overlay mounts BEFORE any await, so the
+  uninitialized form is never revealed;
+- the draft restore runs while the overlay still covers the
+  modal, and ONLY the current boot may reveal the form;
+- the overlay is idempotent (no flicker) and always removed,
+  even when the request is blocked or a restore fails.
+It also adds the ONE genuinely missing draft control: an
+explicit "Clear Now" for the NEW-request draft. Cancel/Close
+keep the draft on purpose (draft survival), so without this
+there is no discard path at all.
+========================================= */
+
+let tradeInCentreBootSeq = 0;
+
+function mountTradeInCentreLoadingOverlay(){
+
+/* Each open supersedes any previous in-flight boot. */
+tradeInCentreBootSeq++;
+
+/* Idempotent: an overlay already covering an in-flight open
+   is KEPT (never removed/re-added — no flicker, no reveal gap). */
+if(!document.getElementById("tradeInCentreLoading")){
+
+const overlay = document.createElement("div");
+overlay.id = "tradeInCentreLoading";
+overlay.className = "hufa-publish-overlay hufa-publish-visible";
+overlay.setAttribute("role","status");
+overlay.setAttribute("aria-live","polite");
+overlay.innerHTML = `
+  <div class="hufa-publish-backdrop"></div>
+  <div class="hufa-publish-center">
+    <div class="hufa-publish-card bg-white">
+      <div class="hufa-publish-spinner"></div>
+      <p class="hufa-publish-brand">HUFA</p>
+      <p class="hufa-publish-title">Loading Trade-In Centre</p>
+      <p class="hufa-publish-subtitle">Preparing your Trade-In Centre...</p>
+    </div>
+  </div>`;
+
+document.body.appendChild(overlay);
+
+}
+
+/* Same scroll handling as the Upload Vehicle loader so the
+   uninitialized form cannot be scrolled into view. */
+document.documentElement.style.overflow = "hidden";
+window.scrollTo(0, 0);
+
+return tradeInCentreBootSeq;
+
+}
+
+function unmountTradeInCentreLoadingOverlay(){
+
+document.getElementById("tradeInCentreLoading")?.remove();
+
+document.documentElement.style.overflow = "";
+
+}
+
+/* PHASE 5B — the Trade-In Centre VIEW loading state. The
+   dashboard "tradeins" view mounts the SAME overlay the moment
+   the view initializes (refresh or navigation) and releases it
+   when initialization finishes, on every exit path. The boot
+   sequence keeps a view boot and a modal boot from ever taking
+   each other's overlay down. */
+let tradeInCentreViewBoot = null;
+
+/* BUG1 FIX — the only callers are loadView's tradeins view init
+   and DashboardPage's synchronous refresh render; both run BEFORE
+   the first await of the view boot, so the overlay shows while
+   the Trade-In Centre initializes. */
+function mountTradeInCentreViewLoading(){
+
+tradeInCentreViewBoot = mountTradeInCentreLoadingOverlay();
+
+return tradeInCentreViewBoot;
+
+}
+
+/* PHASE 5B — the mode the CURRENT Trade-In modal was OPENED in.
+   Captured at open time because the existing submit path resets
+   window.editingTradeInIndex before it closes the modal: without
+   this, a successful EDIT submit would look like a NEW close and
+   would discard the create draft. */
+let tradeInDraftOpenedAsNew = true;
+
+function releaseTradeInCentreViewLoading(){
+
+if(tradeInCentreViewBoot === null){ return; }
+
+const boot = tradeInCentreViewBoot;
+
+tradeInCentreViewBoot = null;
+
+/* Only the CURRENT boot may be released — a newer view load or
+   an open modal owns its own overlay. */
+if(boot === tradeInCentreBootSeq){
+
+unmountTradeInCentreLoadingOverlay();
+
+}
+
+}
+
+/* PHASE 5B — discard the temporary NEW-request draft (text draft
+   + pending images) for the signed-in user only. Used by
+   cancel/close so the next "+ New Trade-In" opens a completely
+   blank form. EDIT mode never calls this. */
+async function discardNewTradeInDraft(){
+
+/* Cancel in-flight debounced writes FIRST so a stale timer can
+   never re-create the draft we are discarding. */
+if(tradeInDraftSaveTimer){
+clearTimeout(tradeInDraftSaveTimer);
+tradeInDraftSaveTimer = null;
+}
+
+if(tradeInImageDraftSaveTimer){
+clearTimeout(tradeInImageDraftSaveTimer);
+tradeInImageDraftSaveTimer = null;
+}
+
+/* BUG2 — invalidate saves already awaiting auth, and sequence
+   the stored clears behind any earlier discard still running. */
+tradeInDraftDiscardSeq++;
+
+const previousDiscard = tradeInDraftDiscardPromise;
+
+tradeInDraftDiscardPromise = (async ()=>{
+
+if(previousDiscard){
+
+try{ await previousDiscard; }catch(_){}
+
+}
+
+try{
+
+const user = await getAuthUser();
+const userId = user && user.id;
+
+if(!userId){ return; }
+
+/* User-scoped keys only (sessionStorage text draft +
+   IndexedDB pending images). */
+clearDraft(TRADE_IN_DRAFT_WORKFLOW, userId);
+
+await clearTradeInImageDraft(userId);
+
+}catch(_){
+/* best-effort discard */
+}
+
+})();
+
+try{ await tradeInDraftDiscardPromise; }catch(_){}
+
+}
+
+/* -----------------------------------------------
+PHASE 5B — explicit discard for the temporary draft
+(NEW request only). Uses ONLY existing store APIs:
+clearDraft()               → sessionStorage text draft
+clearTradeInImageDraft()   → IndexedDB pending images
+No new storage system; EDIT mode, other users, published
+requests and the Upload Vehicle stores are untouched.
+----------------------------------------------- */
+
+const TRADE_IN_DRAFT_HIGHLIGHT_CLASSES = [
+"border-[#E48A2F]",
+"border-[3px]",
+"bg-[#FFF4D6]",
+"shadow-lg",
+"ring-2",
+"ring-[#E48A2F]"
+];
+
+function resetTradeInDraftFormFields(){
+
+for(const id of TRADE_IN_DRAFT_FIELD_IDS){
+const el = document.getElementById(id);
+if(el){ el.value = ""; }
+}
+
+const imageInput = document.getElementById("tradeInImages");
+if(imageInput){ imageInput.value = ""; }
+
+for(const selector of [
+".trade-condition-card",
+".trade-accident-card",
+".trade-service-card"
+]){
+document.querySelectorAll(selector).forEach(card=>{
+card.classList.remove(...TRADE_IN_DRAFT_HIGHLIGHT_CLASSES);
+card.style.transform = "";
+});
+}
+
+for(const id of [
+"reviewCondition",
+"reviewAccidentHistory",
+"reviewServiceHistory"
+]){
+const review = document.getElementById(id);
+if(review){ review.textContent = "—"; }
+}
+
+/* PHASE 5B.1I — the field loop above already emptied the hidden
+   #tradeInFeatures value; reset the in-memory selection, search
+   box and active tab too, then re-render so the chips and counter
+   clear with the rest of the form. */
+tradeInSelectedFeatures = [];
+tradeInActiveFeatureCategory = "";
+const tradeInFeatureSearchReset = document.getElementById("tradeInFeatureSearch");
+if(tradeInFeatureSearchReset){ tradeInFeatureSearchReset.value = ""; }
+renderTradeInFeatureChips();
+
+refreshTradeInDraftSummary();
+
+}
+
+window.openTradeInDraftClearConfirm = function(){
+
+/* Never operable in EDIT mode. */
+if(window.editingTradeInIndex !== undefined){ return; }
+if(document.getElementById("tradeInClearDraftConfirm")){ return; }
+
+const overlay = document.createElement("div");
+overlay.id = "tradeInClearDraftConfirm";
+overlay.className = "hufa-publish-overlay hufa-publish-visible";
+overlay.setAttribute("role","alertdialog");
+overlay.setAttribute("aria-live","assertive");
+overlay.innerHTML = `
+  <div class="hufa-publish-backdrop"></div>
+  <div class="hufa-publish-center">
+    <div class="hufa-publish-card bg-white">
+      <p class="hufa-publish-title">Clear this trade-in draft?</p>
+      <p class="hufa-publish-subtitle">This will remove the information and images currently entered.</p>
+      <div style="margin-top:24px; display:flex; gap:10px; justify-content:center;">
+        <button
+          type="button"
+          id="clearTradeInDraftCancelBtn"
+          class="px-6 py-3 rounded-xl font-bold tracking-wide transition-all duration-300 text-base"
+          style="background:#FFFFFF; color:#08111F; border:1px solid #E2E8F0;"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          id="clearTradeInDraftConfirmBtn"
+          class="px-6 py-3 rounded-xl font-bold tracking-wide transition-all duration-300 text-base"
+          style="background:#E48A2F; color:#08111F;"
+        >
+          Clear Now
+        </button>
+      </div>
+    </div>
+  </div>`;
+
+document.body.appendChild(overlay);
+
+document.getElementById("clearTradeInDraftCancelBtn")
+?.addEventListener("click", ()=>{
+overlay.remove();
+});
+
+document.getElementById("clearTradeInDraftConfirmBtn")
+?.addEventListener("click", ()=>{
+overlay.remove();
+window.confirmClearTradeInDraft();
+});
+
+};
+
+window.closeTradeInDraftClearConfirm = function(){
+document.getElementById("tradeInClearDraftConfirm")?.remove();
+};
+
+window.confirmClearTradeInDraft = async function(){
+
+/* NEW request only — hard guard. */
+if(window.editingTradeInIndex !== undefined){ return; }
+
+window.closeTradeInDraftClearConfirm();
+
+try{
+
+/* 1. Cancel any in-flight debounced write so a stale timer
+cannot re-populate the draft we are about to clear. */
+if(tradeInDraftSaveTimer){
+clearTimeout(tradeInDraftSaveTimer);
+tradeInDraftSaveTimer = null;
+}
+
+if(tradeInImageDraftSaveTimer){
+clearTimeout(tradeInImageDraftSaveTimer);
+tradeInImageDraftSaveTimer = null;
+}
+
+/* 2. Remove BOTH stored drafts for THIS authenticated user
+only (user-scoped keys; nobody else's data is touched). */
+const user = await getAuthUser();
+const userId = user && user.id;
+
+if(userId){
+
+clearDraft(TRADE_IN_DRAFT_WORKFLOW, userId);
+
+await clearTradeInImageDraft(userId);
+
+}
+
+/* 3. In-memory pending state for the open modal. */
+window.__TRADE_IN_IMAGES__ = [];
+window.__TRADE_IN_IMAGE_FILES__ = [];
+
+/* 4. Existing form controls + review summary back to empty,
+rendered through the existing preview path. */
+resetTradeInDraftFormFields();
+renderTradeInImagePreview();
+
+toast("Trade-in draft cleared — ready for a new request");
+
+/* 5. After a CONFIRMED clear, reset the view to the top of
+the fresh form (modal scroller + page). */
+const modalPanel =
+document.querySelector("#tradeInModalOverlay > div");
+
+if(modalPanel){ modalPanel.scrollTop = 0; }
+
+window.scrollTo({ top: 0, behavior: "smooth" });
+
+}catch(e){
+toast("Could not clear the draft. Please try again.");
+}
+
+};
+
+/* =========================================
+PHASE 5B.1M — TRADE-IN FULL-PAGE WORKSPACE
+---------------------------------------------
+Presentation container ONLY. The EXISTING Trade-In NEW/EDIT form is
+rendered as a full dashboard page inside the dashboard MAIN AREA
+(#dashboardView) — the very same area every dashboard view uses — so
+its page shell is the dashboard shell that is already on screen:
+desktop sidebar, mobile burger button (toggleDashboardSidebar), page
+width, spacing and page-level loading state. No second navigation
+system exists; Upload Vehicle / Add Vehicle is the structural
+reference only.
+
+The Trade-In Centre markup that is on screen when the form opens is
+HIDDEN (never destroyed) and shown again verbatim when the form
+closes, so the Centre keeps its data, listeners and primary CTA, and
+closeTradeInModal keeps its existing leave/flush/discard behaviour.
+
+Nothing here touches the form's fields, ids, handlers, validation,
+submission payload, draftStore/tradeInImageStore usage, or the
+existing NEW / EDIT / refresh-reopen / Cancel / Clear behaviour.
+========================================= */
+
+/* The existing view-state variable holds this sentinel while the
+   workspace owns the main area. It keeps the Trade-In Centre's own
+   realtime refresh (which reloads the view when the CURRENT dashboard
+   view is "tradeins") from re-rendering the dashboard underneath an
+   open form. Every dashboard navigation still goes through loadView(),
+   which closes the workspace first. */
+const TRADE_IN_WORKSPACE_VIEW = "tradeinform";
+
+let tradeInWorkspaceHiddenSiblings = null;
+let tradeInWorkspacePreviousView = null;
+
+/* The form's page container (the existing Trade-In container element). */
+function tradeInWorkspaceEl(){
+return document.getElementById("tradeInModalOverlay");
+}
+
+/* Hide the Trade-In Centre markup so the workspace can own the
+   dashboard main area. Returns the host element, or null when the
+   dashboard main area is not on screen (defensive — the workspace is
+   then NOT rendered, because the old popup presentation must never
+   come back). */
+function mountTradeInWorkspaceHost(){
+
+const host =
+document.getElementById("dashboardView");
+
+if(!host){ return null; }
+
+const hidden = [];
+
+Array.from(host.children).forEach((child)=>{
+
+if(child.id === "tradeInModalOverlay"){ return; }
+
+hidden.push({ el: child, display: child.style.display });
+
+child.style.display = "none";
+
+});
+
+tradeInWorkspaceHiddenSiblings = hidden;
+
+/* Remember the view that was on screen so closing the workspace puts
+   the dashboard's view state back exactly as it was. */
+tradeInWorkspacePreviousView =
+window.__CURRENT_DASHBOARD_VIEW__ || "tradeins";
+
+window.__CURRENT_DASHBOARD_VIEW__ =
+TRADE_IN_WORKSPACE_VIEW;
+
+return host;
+
+}
+
+/* Close the workspace: remove the form and reveal the Trade-In Centre
+   markup that was hidden behind it. Pending draft text/image writes
+   were already flushed by closeTradeInModal BEFORE this runs. */
+function unmountTradeInWorkspace(){
+
+tradeInWorkspaceEl()?.remove();
+
+if(Array.isArray(tradeInWorkspaceHiddenSiblings)){
+
+tradeInWorkspaceHiddenSiblings.forEach((entry)=>{
+
+if(entry && entry.el && entry.el.isConnected){
+
+entry.el.style.display = entry.display || "";
+
+}
+
+});
+
+}
+
+tradeInWorkspaceHiddenSiblings = null;
+
+window.__CURRENT_DASHBOARD_VIEW__ =
+tradeInWorkspacePreviousView || "tradeins";
+
+tradeInWorkspacePreviousView = null;
+
+}
+
 window.openTradeInModal = async function(){
+
+/* PHASE 5B — the loading state appears IMMEDIATELY, before
+   ANY await, so the uninitialized form is never revealed. The
+   overlay is taken down only after the draft restore has
+   completed (or the request was blocked), by the CURRENT boot
+   only. */
+const boot = mountTradeInCentreLoadingOverlay();
+
+/* PHASE 5B.1M — this boot loads the full-page Trade-In WORKSPACE, so
+   the shared page-level loading overlay names the form it is about to
+   reveal (the Trade-In Centre VIEW keeps its own "Loading Trade-In
+   Centre" title — that boot never passes through here). Presentation
+   only: the existing overlay element is reused unchanged. */
+const tradeInWorkspaceLoadingTitle =
+document.querySelector(
+"#tradeInCentreLoading .hufa-publish-title"
+);
+
+if(tradeInWorkspaceLoadingTitle){
+tradeInWorkspaceLoadingTitle.textContent =
+"Loading Trade-In Request";
+}
+
+/* PHASE 5B — remember the mode this modal was opened in (EDIT
+   sets window.editingTradeInIndex before calling this). */
+tradeInDraftOpenedAsNew =
+window.editingTradeInIndex === undefined;
+
+/* BUG2+BUG3 — sequence this NEW open behind any in-flight
+   cancel-discard, and reset the empty-write guard for this
+   mount, so a slow discard can never delete the draft this
+   open is restoring. */
+if(tradeInDraftOpenedAsNew){
+
+/* PHASE 5B.1C — a first-time NEW Trade-In has NO saved draft,
+   so the overlay starts on the "Preparing" copy. The
+   "Restoring your Trade-In draft..." copy is only set below,
+   once a saved NEW draft is confirmed to exist. */
+const tradeInCentreSubtitle =
+document.querySelector(
+"#tradeInCentreLoading .hufa-publish-subtitle"
+);
+
+if(tradeInCentreSubtitle){
+tradeInCentreSubtitle.textContent = "Preparing your Trade-In...";
+}
+
+if(tradeInDraftDiscardPromise){
+
+try{ await tradeInDraftDiscardPromise; }catch(_){}
+
+}
+
+window.__TRADE_IN_IMAGE_FILES__ = [];
+
+tradeInImageDraftRestoredThisMount = false;
+
+}
+
+try{
 
 const { data:{ user } } =
 await supabase.auth.getUser();
+
+/* PHASE 5B.1C — the NEW Trade-In subtitle now reflects whether a
+   saved NEW draft actually exists: switch to "Restoring your
+   Trade-In draft..." ONLY when one is found (same loadDraft +
+   validity check the restore uses; loadDraft is synchronous, so
+   no new await and no timing change). First-time NEW opens keep
+   the "Preparing your Trade-In..." copy set above. EDIT mode and
+   the Trade-In Centre view refresh copy are untouched. */
+if(tradeInDraftOpenedAsNew){
+
+const tradeInCentreSubtitle =
+document.querySelector(
+"#tradeInCentreLoading .hufa-publish-subtitle"
+);
+
+const savedTradeInDraft =
+user
+? loadDraft(TRADE_IN_DRAFT_WORKFLOW, user.id)
+: null;
+
+if(
+tradeInCentreSubtitle &&
+savedTradeInDraft &&
+tradeInDraftLooksValid(savedTradeInDraft)
+){
+tradeInCentreSubtitle.textContent =
+"Restoring your Trade-In draft...";
+}
+
+}
 
 if(user){
 
@@ -5575,39 +8506,70 @@ return;
 
 }
 
-document.body.insertAdjacentHTML(
+/* PHASE 5B.1M — FULL-PAGE WORKSPACE (presentation only).
+   The form is inserted into the dashboard MAIN AREA (#dashboardView)
+   instead of being appended to <body> as a fixed popup, so the
+   dashboard shell already on screen — desktop sidebar, mobile burger
+   button (toggleDashboardSidebar), content width, spacing and the
+   shared page heading — is the form's page shell, exactly like the
+   Upload Vehicle / Add Vehicle page.
+
+   The container keeps its existing id (#tradeInModalOverlay), so every
+   existing #tradeInModalOverlay-scoped StyleSheet rule, the existing
+   search-dropdown outside-click binding and the existing
+   refresh/reopen guard keep working unchanged.
+
+   EVERYTHING inside the page container below is the EXISTING form
+   markup, verbatim: ids, field names, handlers, draft keys, review
+   section and submit/cancel/clear actions are untouched. */
+const workspaceHost =
+mountTradeInWorkspaceHost();
+
+if(!workspaceHost){
+
+/* Defensive only — every existing opener runs inside the dashboard
+   main area. Without it the form cannot be presented as a full page,
+   and the old popup presentation must never come back. */
+console.warn(
+"[trade-in] dashboard workspace host missing — Trade-In form not rendered"
+);
+
+return;
+
+}
+
+workspaceHost.insertAdjacentHTML(
 "beforeend",
 `
 
 
+<!-- PHASE 5B.1M — full-page Trade-In workspace. Same page shell as
+     Upload Vehicle / Add Vehicle: shared dashboard navigation +
+     shared page heading + shared content width and spacing. -->
 <div
 id="tradeInModalOverlay"
 class="
-fixed
-inset-0
-bg-black/60
-backdrop-blur-sm
-z-[9999]
-flex
-items-center
-justify-center
-p-4
+trade-in-workspace
+container-main
+fade-in
+max-w-6xl
+mx-auto
+space-y-8
+w-full
 "
-onclick="closeTradeInModal(event)"
 >
+
+${renderDashboardPageHeading("tradeinform")}
 
 <div
 class="
+trade-in-workspace-surface
 bg-white
 rounded-[28px]
 shadow-2xl
 w-full
-max-w-3xl
 p-6
-max-h-[90vh]
-overflow-y-auto
 "
-onclick="event.stopPropagation()"
 >
 
 <div class="flex items-center justify-between mb-6">
@@ -5619,7 +8581,7 @@ ${window.editingTradeInIndex !== undefined
 </h2>
 
 <button
-onclick="closeTradeInModal()"
+onclick="closeTradeInModal(null, true)"
 class="btn btn-dark">
 Close
 </button>
@@ -5679,6 +8641,11 @@ text-sm
 </div>
 
 <div>
+<span class="text-gray-500">Variant</span>
+<div id="tradeInSummaryVariant">—</div>
+</div>
+
+<div>
 <span class="text-gray-500">Year</span>
 <div id="tradeInSummaryYear">—</div>
 </div>
@@ -5703,86 +8670,232 @@ text-sm
 
 </div>
 
+<!-- PHASE 5B.1H-2 — Vehicle Photos placed immediately AFTER the
+     Vehicle Summary and BEFORE Vehicle Details. Image Manager
+     markup, ids and behaviour are unchanged; mt-5/mb-5 keep the
+     existing 20px card spacing on both sides. -->
+<div class="mt-5 mb-5">
+
+  <div class="trade-in-image-manager">
+    <div class="trade-in-image-manager-header">
+      <div>
+        <p class="trade-in-image-eyebrow">Image Manager</p>
+        <h3 class="trade-in-image-title">Vehicle Photos</h3>
+        <p class="trade-in-image-description">
+          Upload a cover image and additional photos. The first image becomes the primary trade-in photo.
+        </p>
+      </div>
+      <div class="trade-in-image-count-badge">
+        <i class="material-symbols-outlined text-[16px] leading-none">photo_library</i>
+        <span id="tradeInImageBadgeCount">0 Photos</span>
+      </div>
+    </div>
+
+    <div
+      id="tradeInImageDropZone"
+      class="trade-in-image-dropzone hufa-dropzone border border-dashed p-8 text-center cursor-pointer rounded-xl transition"
+      role="button"
+      tabindex="0"
+      aria-label="Upload vehicle photos"
+    >
+      <div class="trade-in-image-dropzone-title">Upload Vehicle Photos</div>
+      <div class="trade-in-image-dropzone-copy">Click to browse or drag photos here</div>
+      <div class="trade-in-image-dropzone-meta">Maximum 10 photos • JPG • PNG • WEBP</div>
+    </div>
+
+    <input
+      id="tradeInImages"
+      type="file"
+      accept="image/jpeg,image/jpg,image/png,image/webp"
+      multiple
+      hidden
+    />
+
+    <div class="trade-in-image-status-row">
+      <p id="tradeInImageCount" class="trade-in-image-count">0 / 10 photos selected</p>
+      <p id="tradeInImageRemaining" class="trade-in-image-remaining">10 image slots remaining</p>
+    </div>
+
+    <p
+      id="tradeInImageLimitMessage"
+      class="hidden trade-in-image-limit-message"
+      role="status"
+    >
+      Maximum photos reached. Remove or replace a photo to continue.
+    </p>
+
+    <div
+      id="tradeInImagePreview"
+      class="trade-in-image-grid grid grid-cols-2 md:grid-cols-3 gap-4 mt-4"
+    ></div>
+  </div>
+
+</div>
+
 <div class="grid md:grid-cols-2 gap-4">
 
-<input
-id="tradeInMake"
-type="text"
-placeholder="Vehicle Make"
-class="
-w-full
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
-/>
+<!-- PHASE 5B.1G — Search Vehicle: same interaction and visual
+     treatment as Upload Vehicle's Search Vehicle helper. -->
+<div class="md:col-span-2">
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Search Vehicle
+</label>
+
+<div class="relative">
 
 <input
-id="tradeInModel"
+id="tradeInVehicleSearch"
 type="text"
-placeholder="Vehicle Model"
-class="
-w-full
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
-/>
+class="input-light"
+placeholder="Search by make, model or variant..."
+autocomplete="off"
+>
+
+<div
+id="tradeInVehicleSearchResults"
+class="hidden absolute left-0 right-0 top-full mt-2 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-80 overflow-y-auto"
+></div>
+
+</div>
+
+<p class="text-xs text-slate-500 mt-2">
+Start typing to quickly locate a vehicle before selecting its details below.
+</p>
+
+</div>
+
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Make
+</label>
+
+<select id="tradeInMake" class="input-light">
+<option value="">Select Make</option>
+</select>
+
+<p class="text-xs text-slate-500 mt-2">
+Select the manufacturer exactly as shown on the vehicle registration documents.
+</p>
+
+</div>
+
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Model
+</label>
+
+<select id="tradeInModel" class="input-light">
+<option value="">Select Model</option>
+</select>
+
+<input
+id="tradeInCustomModel"
+class="input-light hidden mt-3"
+placeholder="Enter Model Name"
+>
+
+<p class="text-xs text-slate-500 mt-2">
+If your exact model is unavailable, choose "Other / Not Listed".
+</p>
+
+</div>
+
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Variant
+</label>
+
+<select id="tradeInVariant" class="input-light">
+<option value="">Select Variant (Optional)</option>
+</select>
+
+<input
+id="tradeInCustomVariant"
+class="input-light hidden mt-3"
+placeholder="Enter Variant"
+>
+
+<p class="text-xs text-slate-500 mt-2">
+Selecting the correct variant improves search accuracy and finance estimates.
+</p>
+
+</div>
+
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Year
+</label>
 
 <input
 id="tradeInYear"
-type="number"
 placeholder="Year"
-class="
-w-full
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
-/>
+class="input-light"
+>
+
+<p class="text-xs text-slate-500 mt-2">
+Use the model year shown on the registration certificate.
+</p>
+
+</div>
+
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Mileage
+</label>
 
 <input
 id="tradeInMileage"
-type="number"
 placeholder="Mileage"
-class="
-w-full
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
-/>
+class="input-light"
+>
+
+<p class="text-xs text-slate-500 mt-2">
+Enter the current odometer reading in kilometres.
+</p>
+
+</div>
+
+<!-- PHASE 5B.1J / 5B.1J-1 — Registration Number uses the SAME field
+     structure as every other Vehicle Details field (label + .input-light
+     input + helper line), so it stays compact and single-line and its
+     input aligns with Mileage in the right-hand grid column. The plain
+     <div> wrapper is the same per-field container the sibling fields
+     use (a bare grid item was stretched by align-items:stretch).
+     Id, placeholder, optional value handling, draft save/restore,
+     Continue/Cancel/Clear and the submission payload are all
+     unchanged. -->
+<div>
+
+<label class="block text-sm font-semibold text-slate-700 mb-2">
+Registration Number (Optional)
+</label>
 
 <input
 id="tradeInRegistration"
 type="text"
 placeholder="Registration Number (Optional)"
-class="
-w-full
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
+class="input-light"
 />
+
+<p class="text-xs text-slate-500 mt-2">
+Use the registration number shown on the registration certificate.
+</p>
+
+</div>
 
 <div>
 
-<label class="block mb-2 font-medium">
+<!-- PHASE 5B.1K — Condition & History UI only. This group keeps its
+     wrapper, hidden-input id/value, card data-* values and onclick
+     handler verbatim; only the visual layer (label, card, selected
+     state) is aligned with Vehicle Details / Upload Vehicle. -->
+<label class="trade-choice-label">
 Vehicle Condition
 </label>
 
@@ -5794,144 +8907,94 @@ value=""
 
 <div
 id="tradeInConditionCards"
-class="
-grid
-grid-cols-2
-gap-3
-"
+class="trade-choice-grid"
 >
 
 <button
 type="button"
 data-condition="Excellent"
 onclick="selectTradeInCondition(this)"
-class="
-trade-condition-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-condition-card"
 >
-<div class="font-semibold">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
 Excellent
-</div>
-<div class="text-sm text-gray-500">
+</span>
+<span class="trade-choice-desc">
 Like new condition
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-condition="Good"
 onclick="selectTradeInCondition(this)"
-class="
-trade-condition-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-condition-card"
 >
-<div class="font-semibold">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
 Good
-</div>
-<div class="text-sm text-gray-500">
+</span>
+<span class="trade-choice-desc">
 Minor wear and tear
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-condition="Fair"
 onclick="selectTradeInCondition(this)"
-class="
-trade-condition-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-condition-card"
 >
-<div class="font-semibold">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
 Fair
-</div>
-<div class="text-sm text-gray-500">
+</span>
+<span class="trade-choice-desc">
 Visible age and use
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-condition="Poor"
 onclick="selectTradeInCondition(this)"
-class="
-trade-condition-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-condition-card"
 >
-<div class="font-semibold">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
 Poor
-</div>
-<div class="text-sm text-gray-500">
+</span>
+<span class="trade-choice-desc">
 Requires attention
-</div>
+</span>
 </button>
 
 </div>
 
-</div>
-
-</div>
-
-<div class="mt-4">
-
-<label class="font-semibold block mb-2">
-Vehicle Photos
-</label>
-
-<input
-id="tradeInImages"
-type="file"
-accept="image/jpeg,image/jpg,image/png,image/webp"
-multiple
-class="dashboard-search-input w-full"
-/>
-
-<p
-id="tradeInImageCount"
-class="text-sm text-gray-500 mt-2"
->
-0 / 10 photos selected
+<p class="trade-choice-help">
+Select the option that best matches the vehicle's current condition.
 </p>
 
 </div>
 
-<div
-id="tradeInImagePreview"
-class="
-grid
-grid-cols-2
-md:grid-cols-4
-gap-3
-mt-4
-">
 </div>
 
 <div class="mt-4">
 
-<label class="block mb-2 font-medium">
+<label class="trade-choice-label">
 Accident History
 </label>
 
@@ -5942,100 +9005,92 @@ value=""
 />
 
 <div
-class="
-grid
-grid-cols-2
-gap-3
-"
+class="trade-choice-grid"
 >
 
 <button
 type="button"
 data-accident="None"
 onclick="selectTradeInAccident(this)"
-class="
-trade-accident-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-accident-card"
 >
-<div class="font-semibold">None</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+None
+</span>
+<span class="trade-choice-desc">
 No known accident history
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-accident="Minor"
 onclick="selectTradeInAccident(this)"
-class="
-trade-accident-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-accident-card"
 >
-<div class="font-semibold">Minor</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Minor
+</span>
+<span class="trade-choice-desc">
 Minor repairs recorded
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-accident="Major"
 onclick="selectTradeInAccident(this)"
-class="
-trade-accident-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-accident-card"
 >
-<div class="font-semibold">Major</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Major
+</span>
+<span class="trade-choice-desc">
 Significant accident damage
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-accident="Unknown"
 onclick="selectTradeInAccident(this)"
-class="
-trade-accident-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-accident-card"
 >
-<div class="font-semibold">Unknown</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Unknown
+</span>
+<span class="trade-choice-desc">
 History not available
-</div>
+</span>
 </button>
 
 </div>
+
+<p class="trade-choice-help">
+Select Unknown if you cannot confirm the vehicle's accident history.
+</p>
 
 </div>
 
 <div class="mt-4">
 
-<label class="block mb-2 font-medium">
+<label class="trade-choice-label">
 Service History
 </label>
 
@@ -6046,92 +9101,154 @@ value=""
 />
 
 <div
-class="
-grid
-grid-cols-2
-gap-3
-"
+class="trade-choice-grid"
 >
 
 <button
 type="button"
 data-service="Full"
 onclick="selectTradeInService(this)"
-class="
-trade-service-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-service-card"
 >
-<div class="font-semibold">Full</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Full
+</span>
+<span class="trade-choice-desc">
 Complete service records
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-service="Partial"
 onclick="selectTradeInService(this)"
-class="
-trade-service-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-service-card"
 >
-<div class="font-semibold">Partial</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Partial
+</span>
+<span class="trade-choice-desc">
 Some service records available
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-service="None"
 onclick="selectTradeInService(this)"
-class="
-trade-service-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-service-card"
 >
-<div class="font-semibold">None</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+None
+</span>
+<span class="trade-choice-desc">
 No service records available
-</div>
+</span>
 </button>
 
 <button
 type="button"
 data-service="Unknown"
 onclick="selectTradeInService(this)"
-class="
-trade-service-card
-border
-border-gray-300
-rounded-xl
-p-3
-text-left
-bg-white
-"
+class="trade-choice-card trade-service-card"
 >
-<div class="font-semibold">Unknown</div>
-<div class="text-sm text-gray-500">
+<span
+class="trade-choice-check"
+aria-hidden="true"
+></span>
+<span class="trade-choice-title">
+Unknown
+</span>
+<span class="trade-choice-desc">
 Service history unknown
-</div>
+</span>
 </button>
+
+</div>
+
+<p class="trade-choice-help">
+Select how much of the vehicle's service history is documented.
+</p>
+
+</div>
+
+<div class="mt-4">
+
+<!-- PHASE 5B.1I — Features parity with Upload Vehicle. Sits at the
+end of the vehicle/condition information (Vehicle Details +
+Condition / History) and before the free-text Vehicle Information
+notes. SAME shared catalogue (js/catalog.js getFeatures), SAME
+search box, category tabs, selected chips and selected-count as
+Upload Vehicle's Features section — Trade-In-scoped ids only.
+Selections persist through the EXISTING Trade-In text draft via
+the hidden #tradeInFeatures input (an ADD-ONLY
+TRADE_IN_DRAFT_FIELD_IDS key). -->
+<!-- PHASE 5B.1O - presentation only: this group label now uses the
+     form's existing .trade-choice-label class (the same 14px/600
+     #334155 label the Vehicle Condition / Accident History / Service
+     History groups use) instead of a one-off 16px utility label, so all
+     five group labels in this form read as one family. No id, field,
+     value, option, handler or draft key is touched. -->
+<label class="trade-choice-label">
+Features
+</label>
+
+<div class="border rounded-xl p-4 bg-slate-50">
+
+<input
+id="tradeInFeatureSearch"
+type="text"
+class="input-light mb-3"
+placeholder="Search vehicle features..."
+autocomplete="off"
+>
+
+<div
+id="tradeInSelectedFeatureChips"
+class="hidden flex flex-wrap gap-2 mb-5 pb-4 border-b border-slate-200"
+></div>
+
+<div
+id="tradeInFeatureChips"
+class="space-y-4"
+></div>
+
+<input
+id="tradeInFeatures"
+type="hidden"
+value=""
+>
+
+<div
+class="flex items-center justify-between mt-4"
+>
+
+<div
+class="text-xs text-slate-500"
+>
+Select all features fitted to this vehicle.
+</div>
+
+<div
+id="tradeInFeatureCount"
+class="text-xs font-medium text-slate-600"
+>
+0 selected
+</div>
+
+</div>
 
 </div>
 
@@ -6139,196 +9256,523 @@ Service history unknown
 
 <div class="mt-4">
 
-<label class="block mb-2 font-medium">
+<!-- PHASE 5B.1L — Trade-In Information UI only. The four free-text
+     notes keep every existing id, placeholder, value, draft key,
+     event binding and submission field VERBATIM; only the visual
+     layer changed (section card, heading, logical group labels,
+     Optional tags, .input-light textareas and helper lines).
+     Upload Vehicle is the visual reference only - it is untouched. -->
+<div class="trade-in-info-panel">
+
+<div class="trade-in-info-head">
+
+<p class="trade-in-info-eyebrow">
+Trade-In Information
+</p>
+
+<h3 class="trade-in-info-title">
 Vehicle Information
-</label>
+</h3>
 
-<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<p class="trade-in-info-subtitle">
+Optional notes that help a dealer value your trade-in accurately. Fill in only what is relevant.
+</p>
 
-<div>
-<label class="block text-sm mb-2">
-Modifications
+</div>
+
+<div class="trade-in-info-group">
+
+<p class="trade-in-info-group-label">
+Condition Notes
+</p>
+
+<div class="trade-in-info-grid">
+
+<div class="trade-in-info-field">
+<label class="trade-in-info-label" for="tradeInModifications">
+<span class="trade-in-info-label-text">Modifications</span>
+<span class="trade-in-info-optional">Optional</span>
 </label>
 
 <textarea
 id="tradeInModifications"
 placeholder="List any modifications..."
-class="
-w-full
-min-h-[100px]
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
+class="input-light trade-in-info-textarea"
 ></textarea>
+
+<p class="trade-in-info-help">
+Anything that is not standard fitment — leave blank if none.
+</p>
 </div>
 
-<div>
-<label class="block text-sm mb-2">
-Mechanical Issues
+<div class="trade-in-info-field">
+<label class="trade-in-info-label" for="tradeInMechanicalIssues">
+<span class="trade-in-info-label-text">Mechanical Issues</span>
+<span class="trade-in-info-optional">Optional</span>
 </label>
 
 <textarea
 id="tradeInMechanicalIssues"
 placeholder="Describe any known issues..."
-class="
-w-full
-min-h-[100px]
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
+class="input-light trade-in-info-textarea"
 ></textarea>
+
+<p class="trade-in-info-help">
+Known faults, warning lights or repairs still needed.
+</p>
 </div>
 
-<div>
-<label class="block text-sm mb-2">
-Extras
+</div>
+
+</div>
+
+<div class="trade-in-info-group">
+
+<p class="trade-in-info-group-label">
+Additional Information
+</p>
+
+<div class="trade-in-info-grid">
+
+<div class="trade-in-info-field">
+<label class="trade-in-info-label" for="tradeInExtras">
+<span class="trade-in-info-label-text">Extras</span>
+<span class="trade-in-info-optional">Optional</span>
 </label>
 
 <textarea
 id="tradeInExtras"
 placeholder="Accessories, upgrades, extras..."
-class="
-w-full
-min-h-[100px]
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
+class="input-light trade-in-info-textarea"
 ></textarea>
+
+<p class="trade-in-info-help">
+Accessories or upgrades included with the vehicle.
+</p>
 </div>
 
-<div>
-<label class="block text-sm mb-2">
-Trade Preferences
+<div class="trade-in-info-field">
+<label class="trade-in-info-label" for="tradeInPreferences">
+<span class="trade-in-info-label-text">Trade Preferences</span>
+<span class="trade-in-info-optional">Optional</span>
 </label>
 
 <textarea
 id="tradeInPreferences"
 placeholder="Preferred dealers, trade expectations..."
-class="
-w-full
-min-h-[100px]
-border
-border-gray-300
-rounded-xl
-px-4
-py-3
-bg-white
-"
+class="input-light trade-in-info-textarea"
 ></textarea>
+
+<p class="trade-in-info-help">
+Preferred dealers or expectations for the trade-in offer.
+</p>
 </div>
 
 </div>
 
+</div>
+
+</div>
+
+<!-- PHASE 5B.1N — the Select Dealerships group KEEPS its label and its
+     wrapper: the old Review card that used to sit INSIDE this group's
+     grid moved out into its own full-width Review & Submission section
+     below, so the dealership group can no longer be mistaken for the
+     review panel. No field, id or handler exists here. -->
 <div class="mt-6">
 
-<label class="block mb-3 font-medium">
+<!-- PHASE 5B.1O - presentation only: the same existing
+     .trade-choice-label class as the other four group labels in this
+     form (14px/600 #334155), replacing a one-off 16px utility label.
+     No id, field, value, handler or draft key is touched. -->
+<label class="trade-choice-label">
 Select Dealerships
 </label>
 
-<div
-class="
-grid
-grid-cols-1
-md:grid-cols-2
-gap-3
-"
+<p class="trade-in-dealerships-note">
+Dealership selection is optional — you can submit this Trade-In Request without choosing a specific dealership.
+</p>
+
+</div>
+
+<!-- ============ PHASE 5B.1N — REVIEW & SUBMISSION ============
+     PRESENTATION ONLY. The pre-submit summary is grouped into the seven
+     parts of the request, each with its own completeness indicator, and
+     the submit area states what is still required.
+
+     The five legacy review ids — reviewVehicleSummary, reviewCondition,
+     reviewAccidentHistory, reviewServiceHistory and reviewImageCount —
+     are kept EXACTLY as they were, so every existing writer
+     (refreshTradeInDraftSummary, selectTradeInCondition / Accident /
+     Service, updateTradeInImageChrome, the draft restore and the EDIT
+     restore) keeps filling them unchanged. The extra values are
+     read-only projections rendered by refreshTradeInReviewPanel().
+     No field, id, value, draft key, validation rule, handler or payload
+     was changed. -->
+<section
+id="tradeInReviewPanel"
+class="trade-in-review-panel"
+aria-labelledby="tradeInReviewTitle"
 >
 
-<div
-class="
-mt-6
-border
-border-gray-200
-rounded-2xl
-p-5
-bg-gray-50
-"
->
+<div class="trade-in-review-head">
 
-<div class="font-semibold mb-3">
+<p class="trade-in-review-eyebrow">
+Final Step
+</p>
+
+<h3 id="tradeInReviewTitle" class="trade-in-review-title">
 Review Trade-In Request
+</h3>
+
+<p class="trade-in-review-subtitle">
+Check every section before you submit. Items marked Required must be complete — the optional sections can be left as they are.
+</p>
+
 </div>
 
-<div class="text-sm text-gray-600 mb-4">
-Review all information before submitting your trade-in request.
+<div class="trade-in-review-progress">
+
+<div class="trade-in-review-progress-head">
+
+<span class="trade-in-review-progress-label">
+Request completeness
+</span>
+
+<span id="tradeInReviewProgressValue" class="trade-in-review-progress-value">
+0 of 5 required items complete
+</span>
+
 </div>
 
 <div
-class="
-grid
-grid-cols-1
-md:grid-cols-2
-gap-3
-text-sm
-"
+id="tradeInReviewProgressTrack"
+class="trade-in-review-progress-track"
+role="progressbar"
+aria-valuemin="0"
+aria-valuemax="100"
+aria-valuenow="0"
+aria-labelledby="tradeInReviewProgressValue"
 >
-
-<div>
-<strong>Vehicle:</strong>
-<span id="reviewVehicleSummary">—</span>
+<span id="tradeInReviewProgressFill" class="trade-in-review-progress-fill"></span>
 </div>
 
-<div>
-<strong>Condition:</strong>
-<span id="reviewCondition">—</span>
-</div>
-
-<div>
-<strong>Accident History:</strong>
-<span id="reviewAccidentHistory">—</span>
-</div>
-
-<div>
-<strong>Service History:</strong>
-<span id="reviewServiceHistory">—</span>
-</div>
-
-<div>
-<strong>Images:</strong>
-<span id="reviewImageCount">0 Photos</span>
-</div>
-
+<p id="tradeInReviewProgressHint" class="trade-in-review-progress-hint" role="status">
+Still needed: vehicle details, vehicle photos, vehicle condition, accident history and service history.
+</p>
 
 </div>
 
-</div>
+<div class="trade-in-review-groups">
+
+<!-- 1 of 7 — VEHICLE SUMMARY -->
+<article class="trade-in-review-group" data-review-group="summary">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Vehicle Summary
+</h4>
+
+<span id="tradeInReviewStatusSummary" class="trade-in-review-status" data-state="pending">
+Required
+</span>
 
 </div>
 
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Vehicle</dt>
+<dd><span id="reviewVehicleSummary">—</span></dd>
 </div>
 
-<div class="
-flex
-justify-end
-gap-3
-mt-6
-">
+<div class="trade-in-review-row">
+<dt>Variant</dt>
+<dd><span id="tradeInReviewVariant">—</span></dd>
+</div>
+
+<div class="trade-in-review-row">
+<dt>Mileage</dt>
+<dd><span id="tradeInReviewMileage">—</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 2 of 7 — PHOTOS -->
+<article class="trade-in-review-group" data-review-group="photos">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Photos
+</h4>
+
+<span id="tradeInReviewStatusPhotos" class="trade-in-review-status" data-state="pending">
+Required
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Photos added</dt>
+<dd><span id="reviewImageCount">0 Photos</span></dd>
+</div>
+
+<div class="trade-in-review-row">
+<dt>Requirement</dt>
+<dd><span id="tradeInReviewPhotoRequirement" class="is-empty">At least 1 photo</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 3 of 7 — DETAILS -->
+<article class="trade-in-review-group" data-review-group="details">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Details
+</h4>
+
+<span id="tradeInReviewStatusDetails" class="trade-in-review-status" data-state="pending">
+Required
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Year</dt>
+<dd><span id="tradeInReviewYear">—</span></dd>
+</div>
+
+<div class="trade-in-review-row">
+<dt>Registration</dt>
+<dd><span id="tradeInReviewRegistration">Not provided</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 4 of 7 — CONDITION & HISTORY -->
+<article class="trade-in-review-group" data-review-group="condition">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Condition &amp; History
+</h4>
+
+<span id="tradeInReviewStatusCondition" class="trade-in-review-status" data-state="pending">
+Required
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Condition</dt>
+<dd><span id="reviewCondition">—</span></dd>
+</div>
+
+<div class="trade-in-review-row">
+<dt>Accident history</dt>
+<dd><span id="reviewAccidentHistory">—</span></dd>
+</div>
+
+<div class="trade-in-review-row">
+<dt>Service history</dt>
+<dd><span id="reviewServiceHistory">—</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 5 of 7 — SELECTED FEATURES -->
+<article class="trade-in-review-group" data-review-group="features">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Selected Features
+</h4>
+
+<span id="tradeInReviewStatusFeatures" class="trade-in-review-status" data-state="optional">
+Optional
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Features selected</dt>
+<dd><span id="tradeInReviewFeatureCount">0 selected</span></dd>
+</div>
+
+<div class="trade-in-review-row trade-in-review-row-block">
+<dt>Selected features</dt>
+<dd><span id="tradeInReviewFeatureList" class="trade-in-review-note is-empty">None selected</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 6 of 7 — VEHICLE INFORMATION -->
+<article class="trade-in-review-group" data-review-group="info">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Vehicle Information
+</h4>
+
+<span id="tradeInReviewStatusInfo" class="trade-in-review-status" data-state="optional">
+Optional
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row trade-in-review-row-block">
+<dt>Modifications</dt>
+<dd><span id="tradeInReviewModifications" class="trade-in-review-note is-empty">Not provided</span></dd>
+</div>
+
+<div class="trade-in-review-row trade-in-review-row-block">
+<dt>Mechanical issues</dt>
+<dd><span id="tradeInReviewMechanicalIssues" class="trade-in-review-note is-empty">Not provided</span></dd>
+</div>
+
+<div class="trade-in-review-row trade-in-review-row-block">
+<dt>Extras</dt>
+<dd><span id="tradeInReviewExtras" class="trade-in-review-note is-empty">Not provided</span></dd>
+</div>
+
+<div class="trade-in-review-row trade-in-review-row-block">
+<dt>Trade preferences</dt>
+<dd><span id="tradeInReviewPreferences" class="trade-in-review-note is-empty">Not provided</span></dd>
+</div>
+
+</dl>
+
+</article>
+
+<!-- 7 of 7 — SELECTED DEALERSHIPS -->
+<article class="trade-in-review-group" data-review-group="dealerships">
+
+<div class="trade-in-review-group-head">
+
+<h4 class="trade-in-review-group-title">
+Selected Dealerships
+</h4>
+
+<span id="tradeInReviewStatusDealerships" class="trade-in-review-status" data-state="optional">
+Optional
+</span>
+
+</div>
+
+<dl class="trade-in-review-rows">
+
+<div class="trade-in-review-row">
+<dt>Selected</dt>
+<dd><span id="tradeInReviewDealerships" class="trade-in-review-note is-empty">None selected</span></dd>
+</div>
+
+</dl>
+
+<p class="trade-in-review-group-foot">
+You can submit without choosing a dealership — this section stays optional.
+</p>
+
+</article>
+</div>
+
+</section>
+
+<!-- PHASE 5B.1N — SUBMISSION AREA (presentation only). Same three
+     actions in the same order with the same handlers and the same
+     EDIT-mode rules; only the layout (readiness + actions), the mobile
+     stacking and the new busy state were added. #tradeInSubmitBtn calls
+     handleTradeInSubmit(), a thin presentation wrapper around the
+     UNTOUCHED window.submitTradeInRequest(): it paints the loading
+     state, blocks a double submit and clears itself when the existing
+     submit promise settles. Payload, validation and save flow are
+     unchanged. -->
+<div id="tradeInReviewFooter" class="trade-in-submit-bar">
+
+<div class="trade-in-submit-status">
+
+<div class="trade-in-submit-status-head">
+
+<span
+class="material-symbols-outlined trade-in-submit-status-icon"
+aria-hidden="true"
+>
+fact_check
+</span>
+
+<span id="tradeInSubmitReadiness" class="trade-in-submit-readiness">
+0 of 5 required items complete
+</span>
+
+</div>
+
+<p class="trade-in-submit-note">
+Submitting sends this request in for trade-in offers. Everything above stays editable — you can update or cancel the request from your Trade-Ins afterwards.
+</p>
+
+<p id="tradeInSubmitStatus" class="trade-in-submit-live" role="status" aria-live="polite"></p>
+
+</div>
+
+<div class="trade-in-submit-actions">
+
+${window.editingTradeInIndex === undefined ? `
+<button
+type="button"
+id="tradeInClearDraftBtn"
+onclick="openTradeInDraftClearConfirm()"
+class="trade-in-submit-clear">
+Clear Now
+</button>
+` : ""}
 
 <button
+type="button"
+id="tradeInCancelBtn"
 onclick="closeTradeInModal()"
-class="btn btn-dark">
+class="btn btn-dark trade-in-submit-secondary">
 Cancel
 </button>
 
 <button
-onclick="submitTradeInRequest()"
-class="dashboard-primary-btn">
-${window.editingTradeInIndex !== undefined
+type="button"
+id="tradeInSubmitBtn"
+onclick="handleTradeInSubmit()"
+class="dashboard-primary-btn trade-in-submit-primary"
+aria-busy="false">
+<span class="trade-in-submit-spinner" aria-hidden="true"></span>
+<span class="trade-in-submit-label">${window.editingTradeInIndex !== undefined
 ? "Update Trade-In Request"
-: "Submit Trade-In Request"}
+: "Submit Trade-In Request"}</span>
 </button>
+
+</div>
 
 </div>
 
@@ -6339,21 +9783,546 @@ ${window.editingTradeInIndex !== undefined
 `
 );
 
+  renderTradeInImagePreview();
+
+/* PHASE 5B.1N — bind the Review & Submission section (presentation
+   only): one delegated input/change/click binding, a MutationObserver
+   on the legacy review spans and the first read-only render. Nothing
+   about the open flow, the restore below or the overlay timing
+   changes. */
+initTradeInReviewPanel();
+
+/* PHASE 5B.1G — Vehicle Details parity: fill the shared Make
+   catalogue and bind Search/Make/Model/Variant BEFORE the
+   existing draft restore below runs (still under the loading
+   overlay). Best-effort: an init hiccup can never block the
+   existing flag/restore flow below. */
+try{
+await initTradeInVehicleDetails();
+}catch(_){
+/* Vehicle Details init skipped — the form still opens + restores */
+}
+
+/* PHASE 5B.1I — Features parity: load the SAME shared feature
+   catalogue and bind the picker BEFORE the existing draft restore
+   below runs (the same slot as the 5B.1G Vehicle Details init,
+   still under the loading overlay). Best-effort: an init hiccup
+   can never block the existing flag/restore flow below. */
+try{
+await initTradeInFeatures();
+}catch(_){
+/* Features init skipped — the form still opens + restores */
+}
+
+/* PHASE 5B.1D — the NEW Trade-In form is open: remember the
+   owning user id (sessionStorage view-state, same pattern as the
+   existing "dashboardView" key) so a browser refresh returns
+   straight to this form with its draft + images restored. EDIT
+   mode clears the flag instead — its form is never reopened. */
+setTradeInNewFormOpen(
+tradeInDraftOpenedAsNew && user ? user.id : ""
+);
+
+/* PHASE 6A / PHASE 5B — restore persisted NEW-request draft
+   text fields while the loading overlay STILL covers the modal,
+   so the uninitialized form is never revealed. Edit mode never
+   restores the new-request draft (guard is repeated in the
+   restore). */
+if(window.editingTradeInIndex === undefined){
+
+await restoreTradeInDraft();
+
+/* PHASE 6B — also restore the pending image draft. */
+await restoreTradeInImageDraft();
+
+}
+
+}finally{
+
+/* PHASE 5B — only the CURRENT boot may reveal the form; a
+   stale open finishing late must never uncover a newer one.
+   A blocked request or a failed restore still removes the
+   overlay (never an infinite loading screen). */
+if(boot === tradeInCentreBootSeq){
+
+unmountTradeInCentreLoadingOverlay();
+
+}
+
+}
+
 };
 
-window.closeTradeInModal = function(){
+window.closeTradeInModal = function(event,preserveDraft){
+
+/* PHASE 5B — capture the mode BEFORE any state is reset:
+   cancelling/closing a NEW request discards that draft, while
+   EDIT mode keeps its own behaviour untouched. */
+const isNewRequest =
+window.editingTradeInIndex === undefined;
+
+/* PHASE 6A/6B — EDIT mode still flushes any pending debounced
+   write so the final typed text/selection is captured before the
+   modal DOM is torn down. A NEW request that is being DISCARDED
+   (Cancel / successful submit) must NOT flush here: a late async
+   flush would re-create the very draft that close is about to
+   delete. */
+if(!isNewRequest){
+
+flushTradeInDraftSave();
+
+flushTradeInImageDraftSave();
+
+}
+
+/* PHASE 5B.1D-1 — a NORMAL leave of a NEW form (header Close or
+   backdrop click) PRESERVES the draft: the pending debounced text
+   and image writes are flushed RIGHT NOW — synchronously, before
+   the modal DOM and the pending File list are torn down below —
+   so the latest entries survive and the Trade-In Centre can offer
+   "Continue Trade-In". Cancel and submit close WITHOUT this flag
+   and keep the existing discard path completely unchanged. */
+let tradeInLeaveFlush = null;
+
+if(isNewRequest && preserveDraft){
+
+const tradeInLeaveTextFlush =
+flushTradeInDraftSave(false);
+
+const tradeInLeaveImageFlush =
+flushTradeInImageDraftSave(false);
+
+tradeInLeaveFlush =
+Promise.all([tradeInLeaveTextFlush, tradeInLeaveImageFlush]);
+
+}
+
+/* Reset modal mode so a cancelled edit cannot leak into the
+   next request (keeps NEW/EDIT draft isolation reliable). */
+window.editingTradeInIndex = undefined;
 
 window.__TRADE_IN_IMAGES__ = [];
 window.__TRADE_IN_IMAGE_FILES__ = [];
 
-const modal =
-document.getElementById(
-"tradeInModalOverlay"
+/* PHASE 5B.1M — close the full-page workspace. The flush above already
+   captured the latest draft text/image writes while the form DOM was
+   still mounted; now the form is removed and the Trade-In Centre
+   markup that was hidden behind it is shown again verbatim, with the
+   dashboard view state restored — no dashboard reload, no lost
+   state. */
+unmountTradeInWorkspace();
+
+/* PHASE 5B.1D — the form is closing, so a later refresh lands
+   back on the Trade-In Centre instead of reopening this form. */
+setTradeInNewFormOpen("");
+
+/* PHASE 5B — a DELIBERATE discard (the Cancel button, or the
+   successful-submit close which already cleared both drafts
+   before calling this — a harmless no-op there) removes the
+   temporary draft AND its pending images, so the next
+   "+ New Trade-In" opens a completely blank form. A normal leave
+   (Close / backdrop click) never reaches this discard. */
+if(isNewRequest && preserveDraft){
+
+/* PHASE 5B.1D-1 — draft kept: once the pending text/image
+   flushes have landed, re-check the Centre CTA so it reads
+   "Continue Trade-In". */
+tradeInLeaveFlush.then(refreshTradeInCentreCta).catch(()=>{});
+
+}else if(isNewRequest){
+
+/* PHASE 5B.1D — once the discard has finished, re-check the
+   Centre CTA: with no saved draft left it must read
+   "+ New Trade-In" again. Discard behaviour itself is unchanged. */
+discardNewTradeInDraft().then(refreshTradeInCentreCta);
+
+}
+
+};
+
+/* ============================================
+   PHASE 5B.1N — REVIEW & SUBMISSION (presentation only)
+   --------------------------------------------
+   The Review & Submission section renders READ-ONLY projections of the
+   values the form already holds, plus a completeness indicator built
+   from the SAME requirements submitTradeInRequest() already validates
+   (make + model + year + mileage, condition, accident history, service
+   history and at least one photo). No field, id, value, draft key,
+   validation rule or payload is touched here: the only elements written
+   are the NEW review ids added in phase 5B.1N, while the five legacy
+   review ids (reviewVehicleSummary, reviewCondition,
+   reviewAccidentHistory, reviewServiceHistory, reviewImageCount) keep
+   being filled by the EXISTING writers exactly as before.
+
+   Refreshes are event-driven — one delegated input/change/click binding
+   on the workspace plus a MutationObserver on the legacy review spans —
+   so draft restores, Clear Now and the EDIT repopulate (which set
+   values programmatically, without firing events) update the panel too.
+   ============================================ */
+
+let tradeInReviewRefreshTimer = null;
+let tradeInSubmitBusy = false;
+
+const TRADE_IN_REVIEW_FEATURE_PREVIEW = 6;
+
+function tradeInReviewValue(id){
+const el = document.getElementById(id);
+return el && typeof el.value === "string"
+? el.value.trim()
+: "";
+}
+
+function tradeInReviewSetValue(id, value, emptyLabel){
+const el = document.getElementById(id);
+if(!el){ return; }
+const text = String(value || "").trim();
+el.textContent = text || emptyLabel;
+el.classList.toggle("is-empty", !text);
+}
+
+function tradeInReviewSetStatus(id, state, label){
+const el = document.getElementById(id);
+if(!el){ return; }
+el.textContent = label;
+el.setAttribute("data-state", state);
+}
+
+/* 12500 → "12,500 km". A value the parser cannot read is shown
+   verbatim, so nothing is ever swallowed. */
+function tradeInReviewMileageLabel(mileage){
+if(!mileage){ return ""; }
+const numeric = Number(String(mileage).replace(/[,\s]/g,""));
+return Number.isFinite(numeric)
+? `${numeric.toLocaleString()} km`
+: mileage;
+}
+
+function tradeInReviewPhotoCount(){
+return getTradeInExistingImages().length + getTradeInImageFiles().length;
+}
+
+/* Same JSON contract as the features picker's hidden field: an array of
+   strings, or "" when nothing is selected. Anything unreadable restores
+   to zero selections, exactly like applyTradeInSelectedFeaturesDraft. */
+function tradeInReviewSelectedFeatures(){
+const hidden = document.getElementById("tradeInFeatures");
+const raw = hidden && typeof hidden.value === "string" ? hidden.value.trim() : "";
+if(!raw){ return []; }
+try{
+const parsed = JSON.parse(raw);
+return Array.isArray(parsed)
+? parsed.filter(item=>typeof item === "string")
+: [];
+}catch(_){
+return [];
+}
+}
+
+function tradeInReviewMissingSentence(labels){
+if(labels.length === 1){ return labels[0]; }
+return `${labels.slice(0,-1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+function refreshTradeInReviewPanel(){
+
+const panel = document.getElementById("tradeInReviewPanel");
+
+if(!panel){ return; }
+
+/* ---- read the form exactly as the form reads itself ---- */
+const make = tradeInReviewValue("tradeInMake");
+const model = tradeInReviewValue("tradeInModel");
+const variant = tradeInReviewValue("tradeInVariant");
+const year = tradeInReviewValue("tradeInYear");
+const mileage = tradeInReviewValue("tradeInMileage");
+const registration = tradeInReviewValue("tradeInRegistration");
+const condition = tradeInReviewValue("tradeInCondition");
+const accident = tradeInReviewValue("tradeInAccidentHistory");
+const service = tradeInReviewValue("tradeInServiceHistory");
+
+/* ---- 1 vehicle summary / 2 photos / 3 details ---- */
+tradeInReviewSetValue("tradeInReviewVariant", variant, "Not selected");
+tradeInReviewSetValue("tradeInReviewMileage", tradeInReviewMileageLabel(mileage), "—");
+tradeInReviewSetValue("tradeInReviewYear", year, "—");
+tradeInReviewSetValue("tradeInReviewRegistration", registration, "Not provided");
+
+const photoCount = tradeInReviewPhotoCount();
+const photoDone = photoCount > 0;
+
+tradeInReviewSetValue(
+"tradeInReviewPhotoRequirement",
+photoDone ? "At least 1 photo — met" : "",
+photoDone ? "" : "At least 1 photo — needed"
 );
 
-if(modal){
-modal.remove();
+/* ---- 4 condition & history ---- */
+const historyDone = [condition, accident, service].filter(Boolean).length;
+
+/* ---- 5 selected features ---- */
+const features = tradeInReviewSelectedFeatures();
+const featurePreview = features.slice(0,TRADE_IN_REVIEW_FEATURE_PREVIEW);
+const featureLabel = features.length > TRADE_IN_REVIEW_FEATURE_PREVIEW
+? `${featurePreview.join(" • ")} +${features.length - TRADE_IN_REVIEW_FEATURE_PREVIEW} more`
+: featurePreview.join(" • ");
+
+tradeInReviewSetValue(
+"tradeInReviewFeatureCount",
+`${features.length} selected`,
+"0 selected"
+);
+
+tradeInReviewSetValue("tradeInReviewFeatureList", featureLabel, "None selected");
+
+/* ---- 6 vehicle information (the four optional notes) ---- */
+const noteFields = [
+"tradeInModifications",
+"tradeInMechanicalIssues",
+"tradeInExtras",
+"tradeInPreferences"
+];
+
+const noteTargets = [
+"tradeInReviewModifications",
+"tradeInReviewMechanicalIssues",
+"tradeInReviewExtras",
+"tradeInReviewPreferences"
+];
+
+let noteCount = 0;
+
+noteFields.forEach((field,index)=>{
+const value = tradeInReviewValue(field);
+if(value){ noteCount++; }
+tradeInReviewSetValue(noteTargets[index], value, "Not provided");
+});
+
+/* ---- 7 selected dealerships (nothing is required here) ---- */
+tradeInReviewSetValue("tradeInReviewDealerships", "", "None selected");
+
+/* ---- per-group completeness indicators ---- */
+const vehicleDone = !!(make && model && year && mileage);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusSummary",
+vehicleDone ? "complete" : "pending",
+vehicleDone ? "Complete" : "Required"
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusPhotos",
+photoDone ? "complete" : "pending",
+photoDone ? "Complete" : "Required"
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusDetails",
+year ? "complete" : "pending",
+year ? "Complete" : "Required"
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusCondition",
+historyDone === 3 ? "complete" : "pending",
+historyDone === 3
+? "Complete"
+: (historyDone ? `${historyDone} of 3 set` : "Required")
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusFeatures",
+"optional",
+features.length ? `${features.length} selected` : "Optional"
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusInfo",
+"optional",
+noteCount ? `${noteCount} of 4 added` : "Optional"
+);
+
+tradeInReviewSetStatus(
+"tradeInReviewStatusDealerships",
+"optional",
+"Optional"
+);
+
+/* ---- overall completeness: the same five requirements the existing
+   submit validation already checks ---- */
+const required = [
+{ label:"vehicle details", done:vehicleDone },
+{ label:"vehicle photos", done:photoDone },
+{ label:"vehicle condition", done:!!condition },
+{ label:"accident history", done:!!accident },
+{ label:"service history", done:!!service }
+];
+
+const doneCount = required.filter(item=>item.done).length;
+const totalCount = required.length;
+const missing = required.filter(item=>!item.done).map(item=>item.label);
+const readyToSubmit = doneCount === totalCount;
+const percent = Math.round((doneCount / totalCount) * 100);
+const progressText = `${doneCount} of ${totalCount} required items complete`;
+
+const progressValue = document.getElementById("tradeInReviewProgressValue");
+if(progressValue){ progressValue.textContent = progressText; }
+
+const progressFill = document.getElementById("tradeInReviewProgressFill");
+if(progressFill){ progressFill.style.width = `${percent}%`; }
+
+const progressTrack = document.getElementById("tradeInReviewProgressTrack");
+if(progressTrack){ progressTrack.setAttribute("aria-valuenow", String(percent)); }
+
+const progressHint = document.getElementById("tradeInReviewProgressHint");
+if(progressHint){
+progressHint.textContent = readyToSubmit
+? "Everything required is complete — you can submit your Trade-In Request."
+: `Still needed: ${tradeInReviewMissingSentence(missing)}.`;
 }
+
+panel.setAttribute("data-complete", readyToSubmit ? "true" : "false");
+
+/* ---- submission area readiness ---- */
+const readiness = document.getElementById("tradeInSubmitReadiness");
+if(readiness){
+readiness.textContent = readyToSubmit
+? "All required items complete — ready to submit"
+: progressText;
+}
+
+const footer = document.getElementById("tradeInReviewFooter");
+if(footer){ footer.classList.toggle("is-ready", readyToSubmit); }
+
+}
+
+/* One debounced re-render per burst of changes — the panel is a pure
+   read of the form, so a single setTimeout(0) pass is enough. */
+function scheduleTradeInReviewRefresh(){
+if(tradeInReviewRefreshTimer){ return; }
+tradeInReviewRefreshTimer = setTimeout(()=>{
+tradeInReviewRefreshTimer = null;
+refreshTradeInReviewPanel();
+}, 0);
+}
+
+function initTradeInReviewPanel(){
+
+const workspace = document.getElementById("tradeInModalOverlay");
+
+if(!workspace){
+refreshTradeInReviewPanel();
+return;
+}
+
+if(workspace.dataset.reviewPanelBound === "1"){
+refreshTradeInReviewPanel();
+return;
+}
+
+workspace.dataset.reviewPanelBound = "1";
+
+const onAnyChange = ()=>scheduleTradeInReviewRefresh();
+
+workspace.addEventListener("input", onAnyChange);
+workspace.addEventListener("change", onAnyChange);
+workspace.addEventListener("click", onAnyChange);
+
+/* Draft restores, Clear Now and the EDIT repopulate fill the legacy
+   review spans programmatically (no events), so those spans are
+   watched as well: whenever an existing writer updates one of them,
+   the panel re-renders from the form's current state. The refresh
+   itself only writes the NEW review ids, so this can never loop. */
+if(typeof MutationObserver === "function"){
+
+const observer = new MutationObserver(onAnyChange);
+
+[
+"reviewVehicleSummary",
+"reviewCondition",
+"reviewAccidentHistory",
+"reviewServiceHistory",
+"reviewImageCount"
+].forEach(id=>{
+const node = document.getElementById(id);
+if(node){
+observer.observe(node,{ childList:true, characterData:true, subtree:true });
+}
+});
+
+}
+
+refreshTradeInReviewPanel();
+
+/* Belt and braces: the EDIT repopulate finishes ~200ms after the form
+   opens. One late pass keeps the panel in step even if that path
+   ever changes. */
+setTimeout(scheduleTradeInReviewRefresh, 400);
+
+}
+
+/* ---- submission busy state (presentation only) ---- */
+function setTradeInSubmitBusy(busy){
+
+const button = document.getElementById("tradeInSubmitBtn");
+const status = document.getElementById("tradeInSubmitStatus");
+const footer = document.getElementById("tradeInReviewFooter");
+
+if(button){
+
+button.disabled = !!busy;
+button.setAttribute("aria-busy", busy ? "true" : "false");
+button.classList.toggle("is-busy", !!busy);
+
+const label = button.querySelector(".trade-in-submit-label");
+
+if(label){
+label.textContent = busy
+? "Submitting Trade-In Request..."
+: (window.editingTradeInIndex !== undefined
+? "Update Trade-In Request"
+: "Submit Trade-In Request");
+}
+
+}
+
+if(status){
+status.textContent = busy
+? "Uploading your photos and saving the Trade-In Request — please wait."
+: "";
+}
+
+if(footer){ footer.classList.toggle("is-submitting", !!busy); }
+
+}
+
+/* PHASE 5B.1N — the submit button's onclick. It ONLY paints the loading
+   state, blocks a double submit and clears itself again: the call below
+   is the same call the button made before this phase, and
+   submitTradeInRequest(), its validation, its payload and the draft
+   clearing after a successful save are all untouched. */
+window.handleTradeInSubmit = function(){
+
+if(tradeInSubmitBusy){ return; }
+
+tradeInSubmitBusy = true;
+
+setTradeInSubmitBusy(true);
+
+Promise.resolve()
+.then(()=>{
+return typeof window.submitTradeInRequest === "function"
+? window.submitTradeInRequest()
+: null;
+})
+.catch(error=>{
+console.error(
+"Trade-In submit failed",
+error
+);
+})
+.finally(()=>{
+tradeInSubmitBusy = false;
+setTradeInSubmitBusy(false);
+});
 
 };
 
@@ -6414,6 +10383,9 @@ button.dataset.condition;
 
 }
 
+/* PHASE 6A — persist the NEW-request condition selection */
+scheduleTradeInDraftSave();
+
 };
 
 window.selectTradeInAccident =
@@ -6471,6 +10443,9 @@ review.textContent =
 button.dataset.accident;
 
 }
+
+/* PHASE 6A — persist the NEW-request accident selection */
+scheduleTradeInDraftSave();
 
 };
 
@@ -6531,6 +10506,9 @@ button.dataset.service;
 
 }
 
+/* PHASE 6A — persist the NEW-request service selection */
+scheduleTradeInDraftSave();
+
 };
 
 document.addEventListener(
@@ -6543,6 +10521,9 @@ document.getElementById("tradeInMake");
 const model =
 document.getElementById("tradeInModel");
 
+const variant =
+document.getElementById("tradeInVariant");
+
 const year =
 document.getElementById("tradeInYear");
 
@@ -6554,6 +10535,9 @@ document.getElementById("tradeInSummaryMake");
 
 const modelBox =
 document.getElementById("tradeInSummaryModel");
+
+const variantBox =
+document.getElementById("tradeInSummaryVariant");
 
 const yearBox =
 document.getElementById("tradeInSummaryYear");
@@ -6569,6 +10553,11 @@ make.value || "—";
 if(model && modelBox){
 modelBox.textContent =
 model.value || "—";
+}
+
+if(variant && variantBox){
+variantBox.textContent =
+variant.value || "—";
 }
 
 if(year && yearBox){
@@ -6602,6 +10591,19 @@ year.value
 .join(" ") || "—";
 }
 
+/* PHASE 6A - debounced autosave of the NEW-request text draft.
+   Reuses the existing document input binding, so no extra
+   listener is created when the modal opens. */
+if(
+!tradeInDraftRestoring &&
+window.editingTradeInIndex === undefined &&
+e.target &&
+TRADE_IN_DRAFT_FIELD_IDS.includes(e.target.id)
+){
+scheduleTradeInDraftSave();
+}
+
+
 }
 );
 
@@ -6613,21 +10615,16 @@ window.__TRADE_IN_IMAGES__ || [];
 window.__TRADE_IN_IMAGE_FILES__ =
 window.__TRADE_IN_IMAGE_FILES__ || [];
 
+/* The original Trade-In change listener is retained only as a
+   non-registered compatibility block; the active listener below owns
+   the new validated image pipeline. */
+
+
 document.addEventListener(
 "change",
 async function(e){
 
-if(
-e.target &&
-e.target.id === "tradeInImages"
-){
-
-const preview =
-document.getElementById(
-"tradeInImagePreview"
-);
-
-if(!preview) return;
+if(false){
 
 const newFiles =
 Array.from(e.target.files || []);
@@ -6766,218 +10763,29 @@ alert(
 const files =
 window.__TRADE_IN_IMAGE_FILES__;
 
-preview.innerHTML = "";
+/* PHASE 6B — the existing Trade-In preview markup/behaviour
+   now lives in one shared function so a restored pending image
+   draft renders through the exact same path. */
+renderTradeInImagePreview();
 
-const existingImages =
-window.__TRADE_IN_IMAGES__ || [];
-
-const totalImages =
-existingImages.length +
-files.length;
-
-const countBox =
-document.getElementById(
-"tradeInImageCount"
-);
-
-if(countBox){
-countBox.textContent =
-`${totalImages} / 10 photos selected`;
-}
-
-const reviewImages =
-document.getElementById(
-"reviewImageCount"
-);
-
-if(reviewImages){
-
-reviewImages.textContent =
-`${totalImages} Photos`;
-
-}
-
-existingImages.forEach((image,index)=>{
-
-preview.insertAdjacentHTML(
-"beforeend",
-`
-<div class="
-relative
-aspect-square
-overflow-hidden
-rounded-xl
-border
-border-gray-200
-">
-
-<img
-src="${image}"
-class="
-w-full
-h-full
-object-cover
-"
-/>
-
-<button
-type="button"
-onclick="
-window.__TRADE_IN_IMAGES__.splice(
-${index},
-1
-);
-
-this.parentElement.remove();
-
-const count =
-(window.__TRADE_IN_IMAGES__.length || 0)
-+
-(window.__TRADE_IN_IMAGE_FILES__.length || 0);
-
-const countBox =
-document.getElementById(
-'tradeInImageCount'
-);
-
-if(countBox){
-countBox.textContent =
-count + ' / 10 photos selected';
-}
-
-const reviewImages =
-document.getElementById(
-'reviewImageCount'
-);
-
-if(reviewImages){
-reviewImages.textContent =
-count + ' Photos';
-}
-"
-class="
-absolute
-top-2
-right-2
-w-7
-h-7
-rounded-full
-bg-black/70
-text-white
-text-xs
-flex
-items-center
-justify-center
-"
->
-✕
-</button>
-
-</div>
-`
-);
-
-});
-
-files.forEach(file=>{
-
-const reader =
-new FileReader();
-
-reader.onload = function(ev){
-
-preview.insertAdjacentHTML(
-"beforeend",
-`
-<div class="
-relative
-aspect-square
-overflow-hidden
-rounded-xl
-border
-border-gray-200
-">
-
-<img
-src="${ev.target.result}"
-class="
-w-full
-h-full
-object-cover
-"
-/>
-
-<button
-type="button"
-onclick="
-const card = this.parentElement;
-
-const index =
-Array.from(
-card.parentElement.children
-).indexOf(card);
-
-window.__TRADE_IN_IMAGE_FILES__.splice(
-index,
-1
-);
-
-card.remove();
-
-const count =
-window.__TRADE_IN_IMAGE_FILES__.length;
-
-const countBox =
-document.getElementById(
-'tradeInImageCount'
-);
-
-if(countBox){
-countBox.textContent =
-count + ' / 10 photos selected';
-}
-
-const reviewImages =
-document.getElementById(
-'reviewImageCount'
-);
-
-if(reviewImages){
-reviewImages.textContent =
-count + ' Photos';
-}
-"
-class="
-absolute
-top-2
-right-2
-w-7
-h-7
-rounded-full
-bg-black/70
-text-white
-text-xs
-flex
-items-center
-justify-center
-"
->
-✕
-</button>
-
-</div>
-`
-);
-
-};
-
-reader.readAsDataURL(file);
-
-});
+/* PHASE 6B — persist the updated pending image list. */
+scheduleTradeInImageDraftSave();
 
 }
 
 }
+);
+
+document.addEventListener(
+  "change",
+  async function(e){
+    if(e.target && e.target.id === "tradeInImages"){
+      const input = e.target;
+      const newFiles = Array.from(input.files || []);
+      input.value = "";
+      await handleTradeInImageFiles(newFiles);
+    }
+  }
 );
 
 window.manageVehicle = function(id){
@@ -7159,6 +10967,353 @@ counter.textContent =
 `${index + 1} / ${images.length}`;
 }
 
+};
+
+/* PHASE 5B.1Q — user-facing negotiation chip for ONE dealership
+   valuation. It maps the EXISTING per-valuation status values
+   (Pending / Negotiating / Accepted / Declined) onto the
+   negotiation language sellers recognise. Presentation only —
+   no new status values and no new data are written. */
+function tradeInValuationStatusChip(status){
+
+const normalized =
+String(status || "Pending")
+.toLowerCase();
+
+const map = {
+pending:{
+label:"Awaiting Response",
+mod:"awaiting"
+},
+"awaiting response":{
+label:"Awaiting Response",
+mod:"awaiting"
+},
+negotiating:{
+label:"Negotiating",
+mod:"negotiating"
+},
+accepted:{
+label:"Accepted",
+mod:"accepted"
+},
+declined:{
+label:"Declined",
+mod:"declined"
+}
+};
+
+const entry =
+map[normalized] || {
+label:status || "Awaiting Response",
+mod:"awaiting"
+};
+
+return `
+<span class="
+trade-status-chip
+trade-status-chip--${entry.mod}
+">
+${entry.label}
+</span>
+`;
+
+}
+
+/* TRADE-IN NEGOTIATION MESSAGING — seller <-> dealership text
+   thread attached to ONE valuation inside ONE trade-in.
+   Thread key = (trade_in_id, valuation_id). Offer actions
+   (Accept / Counter / Decline) are untouched and text messages
+   never change offer status or amount. */
+
+function tradeInNegotiationEscape(value){
+return String(value ?? "")
+.replace(/&/g, "&amp;")
+.replace(/</g, "&lt;")
+.replace(/>/g, "&gt;")
+.replace(/"/g, "&quot;")
+.replace(/'/g, "&#39;");
+}
+
+function tradeInNegotiationKey(tradeInId, valuationId){
+return `${String(tradeInId || "")}|||${String(valuationId || "")}`;
+}
+
+function tradeInNegotiationDomId(key){
+return String(key || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function tradeInNegotiationThreadHtml(request, valuation){
+const key = tradeInNegotiationKey(request?.id, valuation?.id);
+const dom = tradeInNegotiationDomId(key);
+const unread = Number(valuation?.__negotiationUnread || 0);
+return `
+<div class="trade-negotiation trade-negotiation--thread"
+data-trade-negotiation="${tradeInNegotiationEscape(key)}">
+<div class="trade-negotiation-head">
+<span class="trade-negotiation-title">Negotiation</span>
+${unread > 0 ? `<span class="trade-status-chip trade-status-chip--negotiating">New</span>` : ""}
+</div>
+<p class="trade-negotiation-hint">
+Discuss this specific offer. Messages never change the offer amount.
+</p>
+<div class="trade-chat-log" id="tradeChatLog_${dom}">
+<div class="trade-chat-empty">Loading negotiation messages…</div>
+</div>
+<div class="trade-chat-error" id="tradeChatError_${dom}" hidden></div>
+<div class="trade-chat-composer">
+<input
+type="text"
+id="tradeChatInput_${dom}"
+class="trade-chat-input"
+maxlength="2000"
+placeholder="Type your negotiation message…"
+autocomplete="off"
+/>
+<button
+type="button"
+id="tradeChatSend_${dom}"
+class="trade-negotiation-btn trade-negotiation-btn--accept trade-chat-send"
+>
+Send
+</button>
+</div>
+</div>
+`;
+}
+
+function tradeInNegotiationFindContext(tradeInId, valuationId){
+const requests = window.__TRADE_IN_REQUESTS__ || [];
+const request = requests.find(r => String(r?.id) === String(tradeInId));
+const valuation = (request?.valuations || [])
+.find(v => String(v?.id) === String(valuationId));
+return { request, valuation };
+}
+
+function tradeInNegotiationEls(tradeInId, valuationId){
+const dom = tradeInNegotiationDomId(
+tradeInNegotiationKey(tradeInId, valuationId)
+);
+return {
+log: document.getElementById(`tradeChatLog_${dom}`),
+input: document.getElementById(`tradeChatInput_${dom}`),
+send: document.getElementById(`tradeChatSend_${dom}`),
+error: document.getElementById(`tradeChatError_${dom}`),
+};
+}
+
+function tradeInNegotiationShowError(tradeInId, valuationId, text){
+const { error } = tradeInNegotiationEls(tradeInId, valuationId);
+if(!error){ return; }
+if(!text){
+error.hidden = true;
+error.textContent = "";
+return;
+}
+error.hidden = false;
+error.textContent = text;
+}
+
+function tradeInNegotiationLabel(message, currentUserId, isDealer){
+const mine = String(message?.sender_id || "") === String(currentUserId || "");
+if(mine){ return "You"; }
+if(String(message?.sender_role || "") === "dealer"){ return "Dealership"; }
+if(String(message?.sender_role || "") === "seller"){ return "Seller"; }
+return isDealer ? "Seller" : "Dealership";
+}
+
+async function loadTradeInNegotiationThread(tradeInId, valuationId){
+const { log } = tradeInNegotiationEls(tradeInId, valuationId);
+if(!log){ return; }
+tradeInNegotiationShowError(tradeInId, valuationId, "");
+let currentUserId = "";
+let isDealer = false;
+try{
+const { data: { user } } = await supabase.auth.getUser();
+currentUserId = user?.id || "";
+if(user){
+const { data: profile } = await supabase
+.from("profiles")
+.select("account_type")
+.eq("id", user.id)
+.single();
+isDealer = profile?.account_type === "dealer";
+}
+}catch(_){
+/* Best-effort only; thread still renders. */
+}
+let result = null;
+try{
+result = await getTradeInNegotiationThread({
+tradeInId,
+valuationId,
+markRead: true,
+});
+}catch(error){
+console.error("TRADE-IN NEGOTIATION LOAD FAILED", error);
+log.innerHTML = `<div class="trade-chat-empty">No negotiation messages yet.</div>`;
+return;
+}
+if(!result || result.migrated === false){
+log.innerHTML = `<div class="trade-chat-empty">Negotiation messaging is being enabled. Offer actions still work.</div>`;
+return;
+}
+const messages = Array.isArray(result.messages) ? result.messages : [];
+if(!messages.length){
+log.innerHTML = `<div class="trade-chat-empty">No negotiation messages yet.</div>`;
+return;
+}
+log.innerHTML = messages.map(m => {
+const mine = String(m.sender_id || "") === String(currentUserId || "");
+const label = tradeInNegotiationEscape(
+tradeInNegotiationLabel(m, currentUserId, isDealer)
+);
+const when = m.created_at
+? new Date(m.created_at).toLocaleString("en-ZA")
+: "";
+const fresh = (!m.is_read && !mine)
+? ` <span class="trade-chat-new">• New</span>`
+: "";
+return `<div class="trade-chat-msg${mine ? " trade-chat-msg--mine" : ""}">`
++ `<div class="trade-chat-who">${label}${fresh}</div>`
++ `<div class="trade-chat-text">${tradeInNegotiationEscape(m.message)}</div>`
++ (when ? `<div class="trade-chat-when">${tradeInNegotiationEscape(when)}</div>` : "")
++ `</div>`;
+}).join("");
+log.scrollTop = log.scrollHeight;
+}
+
+const __tradeInNegotiationSending = new Set();
+
+window.sendTradeInNegotiationMessage =
+async function(tradeInId, valuationId){
+const key = tradeInNegotiationKey(tradeInId, valuationId);
+if(__tradeInNegotiationSending.has(key)){ return; }
+const { input, send, log } = tradeInNegotiationEls(tradeInId, valuationId);
+if(!input){ return; }
+const text = String(input.value || "").trim();
+tradeInNegotiationShowError(tradeInId, valuationId, "");
+if(!text){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Type a message before sending."
+);
+input.focus();
+return;
+}
+__tradeInNegotiationSending.add(key);
+if(send){ send.disabled = true; }
+const draft = input.value;
+try{
+const { data: { user } } = await supabase.auth.getUser();
+if(!user){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Please sign in to send negotiation messages."
+);
+return;
+}
+const { request, valuation } = tradeInNegotiationFindContext(
+tradeInId,
+valuationId
+);
+if(!request || !valuation){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Could not find this negotiation thread."
+);
+return;
+}
+const isOwner = String(request.user_id || "") === String(user.id);
+let viewerIsDealer = false;
+try{
+const { data: profile } = await supabase
+.from("profiles")
+.select("account_type")
+.eq("id", user.id)
+.single();
+viewerIsDealer = profile?.account_type === "dealer";
+}catch(_){
+viewerIsDealer = false;
+}
+if(!isOwner && !viewerIsDealer){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"You are not authorized to message on this trade-in."
+);
+return;
+}
+/* Dealer identity for the thread: stamped dealer_id for new
+   valuations; for legacy valuations fall back to the first
+   dealer-sent message already in the thread (never stored on
+   the vehicle alone — always this trade_in + valuation). */
+let threadDealerId = valuation.dealer_id || null;
+if(!threadDealerId){
+try{
+const prior = await getTradeInNegotiationThread({
+tradeInId,
+valuationId,
+markRead: false,
+});
+const seed = (prior?.messages || []).find(
+m => String(m?.sender_role || "") === "dealer" && m?.sender_id
+);
+if(seed?.sender_id){ threadDealerId = seed.sender_id; }
+}catch(_){
+/* Fallback stays null; RLS legacy path still applies. */
+}
+if(!threadDealerId && viewerIsDealer && !isOwner){
+threadDealerId = user.id;
+}
+}
+const receiverId = isOwner
+? (threadDealerId || null)
+: (request.user_id || null);
+const result = await sendTradeInNegotiationMessage({
+tradeInId,
+valuationId,
+dealerId: threadDealerId || null,
+receiverId,
+message: text,
+});
+if(result && result.error === "NOT_MIGRATED"){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Negotiation messaging is being enabled. Kept your text — try again shortly."
+);
+input.value = draft;
+input.focus();
+return;
+}
+if(!result || result.error){
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Could not send the message. Kept your text — please try again."
+);
+input.value = draft;
+input.focus();
+return;
+}
+input.value = "";
+await loadTradeInNegotiationThread(tradeInId, valuationId);
+}catch(error){
+console.error("TRADE-IN NEGOTIATION SEND FAILED", error);
+input.value = draft;
+tradeInNegotiationShowError(
+tradeInId,
+valuationId,
+"Could not send the message. Kept your text — please try again."
+);
+}finally{
+__tradeInNegotiationSending.delete(key);
+if(send){ send.disabled = false; }
+}
 };
 
 window.viewTradeInRequest = function(index){
@@ -7382,6 +11537,24 @@ bg-red-100
 text-red-800
 ">
 Declined
+</span>
+`
+:
+request.status === "Negotiating"
+?
+`
+<span class="
+inline-flex
+items-center
+px-3
+py-1
+rounded-full
+text-xs
+font-semibold
+bg-purple-100
+text-purple-800
+">
+Negotiating
 </span>
 `
 :
@@ -7670,6 +11843,8 @@ BEST OFFER
 R ${Number(v.amount || 0).toLocaleString()}
 </div>
 
+${tradeInValuationStatusChip(v.status)}
+
 </div>
 
 <div class="text-sm text-gray-500">
@@ -7683,8 +11858,23 @@ v.submittedAt
 
 </div>
 
+<div class="mt-3">
+
+<div class="
+text-[11px]
+font-bold
+uppercase
+tracking-wide
+text-gray-500
+mb-1
+">
+Valuation Message
+</div>
+
 <div class="text-sm text-gray-700">
-${v.notes || "No dealer notes provided"}
+${v.notes || "No valuation message provided"}
+</div>
+
 </div>
 
 ${
@@ -7811,75 +12001,93 @@ item.createdAt
 ""
 }
 
+${tradeInNegotiationThreadHtml(request, v)}
+
 ${
 request.status !== "Accepted"
 &&
 request.status !== "Declined"
 ?
 `
-<div class="
-grid
-grid-cols-3
-gap-2
-mt-3
-">
+<div class="trade-negotiation">
+
+<div class="trade-negotiation-head">
+
+<span class="trade-negotiation-title">
+Negotiate This Offer
+</span>
+
+</div>
+
+<p class="trade-negotiation-hint">
+Accept the dealership's offer, send a counter price to negotiate, or decline it.
+</p>
+
+<div class="trade-negotiation-actions">
 
 <button
 onclick="acceptTradeInOffer('${request.id}','${v.id}')"
 class="
-dashboard-primary-btn
-w-full
-justify-center
+trade-negotiation-btn
+trade-negotiation-btn--accept
 "
+aria-label="Accept the dealership's offer"
 >
 Accept Offer
 </button>
 
 <button
-onclick="declineTradeInOffer('${request.id}','${v.id}')"
-class="
-btn btn-dark
-w-full
-justify-center
-"
->
-Decline Offer
-</button>
-
-<button
 onclick="openCounterOfferModal('${request.id}','${v.id}')"
 class="
-btn btn-dark
-w-full
-justify-center
+trade-negotiation-btn
+trade-negotiation-btn--counter
 "
+aria-label="Counter the dealership's offer"
 >
 Counter Offer
 </button>
 
+<button
+onclick="declineTradeInOffer('${request.id}','${v.id}')"
+class="
+trade-negotiation-btn
+trade-negotiation-btn--decline
+"
+aria-label="Decline the dealership's offer"
+>
+Decline Offer
+</button>
+
 </div>
+
+</div>
+
+<div class="trade-dealer-only">
 
 ${
 (v.negotiationHistory || []).length
-&&
-request.status !== "Accepted"
-&&
-request.status !== "Declined"
 ?
 `
 <div class="
-grid
-grid-cols-3
-gap-2
-mt-3
+trade-negotiation
+trade-negotiation--dealer
 ">
+
+<div class="trade-negotiation-head">
+
+<span class="trade-negotiation-title">
+Dealer Response
+</span>
+
+</div>
+
+<div class="trade-negotiation-actions">
 
 <button
 onclick="dealerAcceptCounter('${request.id}','${v.id}')"
 class="
-dashboard-primary-btn
-w-full
-justify-center
+trade-negotiation-btn
+trade-negotiation-btn--accept
 "
 >
 Accept Counter
@@ -7888,9 +12096,8 @@ Accept Counter
 <button
 onclick="dealerRejectCounter('${request.id}','${v.id}')"
 class="
-btn btn-dark
-w-full
-justify-center
+trade-negotiation-btn
+trade-negotiation-btn--decline
 "
 >
 Reject Counter
@@ -7899,19 +12106,22 @@ Reject Counter
 <button
 onclick="dealerReviseOffer('${request.id}','${v.id}')"
 class="
-btn btn-dark
-w-full
-justify-center
+trade-negotiation-btn
+trade-negotiation-btn--counter
 "
 >
 Revise Offer
 </button>
 
 </div>
+
+</div>
 `
 :
 ""
 }
+
+</div>
 
 `
 :
@@ -7980,6 +12190,94 @@ request.createdAt
 
 `
 );
+
+/* TRADE-IN NEGOTIATION — boot every visible thread once the
+   detail modal is in the DOM. Loads only the open trade-in's
+   threads (one lightweight query per valuation), wires Send +
+   Enter, and never touches offer actions. */
+(async () => {
+
+try{
+
+const threads = Array.from(
+document.querySelectorAll("#tradeInViewModal [data-trade-negotiation]")
+);
+
+for(const host of threads){
+
+const raw = String(host.getAttribute("data-trade-negotiation") || "");
+const sep = raw.lastIndexOf("|||");
+
+if(sep < 0){ continue; }
+
+const tradeInId = raw.slice(0, sep);
+const valuationId = raw.slice(sep + 3);
+
+if(!tradeInId || !valuationId){ continue; }
+
+const { input, send } = tradeInNegotiationEls(tradeInId, valuationId);
+
+if(input && !input.dataset.tradeNegotiationBound){
+input.dataset.tradeNegotiationBound = "1";
+input.addEventListener("keydown", (event) => {
+if(event.key === "Enter"){
+event.preventDefault();
+window.sendTradeInNegotiationMessage(tradeInId, valuationId);
+}
+});
+}
+
+if(send && !send.dataset.tradeNegotiationBound){
+send.dataset.tradeNegotiationBound = "1";
+send.addEventListener("click", () => {
+window.sendTradeInNegotiationMessage(tradeInId, valuationId);
+});
+}
+
+loadTradeInNegotiationThread(tradeInId, valuationId);
+
+}
+
+}catch(_){
+/* Negotiation boot is additive only; modal stays usable. */
+}
+
+/* PHASE 5B.1Q — the dealership's counter-response actions belong
+   to the dealership side of the negotiation, so they stay hidden
+   while the private seller reads this modal. The check reuses the
+   exact same profiles lookup every other Trade-In handler already
+   performs; nothing else in the modal is touched. */
+(async () => {
+
+const {
+data:{ user }
+} = await supabase.auth.getUser();
+
+if(!user){
+return;
+}
+
+const {
+data:profile
+} = await supabase
+.from("profiles")
+.select("account_type")
+.eq("id", user.id)
+.single();
+
+if(profile?.account_type === "dealer"){
+
+document
+.querySelectorAll(
+"#tradeInViewModal .trade-dealer-only"
+)
+.forEach(el => el.classList.remove("trade-dealer-only"));
+
+}
+
+})();
+
+})();
 
 };
 
@@ -8094,9 +12392,22 @@ mb-4
 "
 />
 
+<label
+for="valuationNotes"
+class="
+block
+text-sm
+font-semibold
+text-slate-700
+mb-2
+"
+>
+Valuation Message
+</label>
+
 <textarea
 id="valuationNotes"
-placeholder="Dealer Notes"
+placeholder="Valuation Message"
 class="
 w-full
 min-h-[120px]
@@ -8667,11 +12978,27 @@ tradeInRequest.imageCount
 }
 );
 
-alert(
+/* PHASE 5B.1Q — success feedback uses the existing HUFA in-app
+   toast instead of a blocking browser alert(). */
+toast(
 isEditing
 ? "Trade-In Request updated successfully."
-: "Trade-In Request submitted successfully."
+: "Trade-In request submitted successfully."
 );
+
+/* PHASE 6A - clear the NEW-request text draft only after a
+   genuinely successful submission. Edit mode and every failed
+   save keep the draft intact. */
+if(!isEditing){
+
+await clearTradeInDraftAfterSave();
+
+/* PHASE 6B — clear the NEW-request image draft only after a
+   genuinely successful submission. EDIT mode never clears it. */
+await clearTradeInImageDraftAfterSave();
+
+}
+
 
 closeTradeInModal();
 
@@ -8762,6 +13089,11 @@ crypto.randomUUID(),
 
 amount,
 notes,
+
+/* TRADE-IN NEGOTIATION — stamp the valuing dealer so each
+   (trade_in_id, valuation_id) thread stays per-dealership.
+   Legacy valuations without this field keep working. */
+dealer_id: user.id,
 
 submittedAt:
 new Date().toISOString(),
@@ -8869,8 +13201,8 @@ is_read:false
 
 });
 
-alert(
-"Valuation submitted successfully."
+toast(
+"Trade-In valuation received."
 );
 
 window.loadView(
@@ -9006,8 +13338,8 @@ is_read:false
 
 });
 
-alert(
-"Offer accepted"
+toast(
+"Offer accepted."
 );
 
 window.loadView(
@@ -9120,8 +13452,8 @@ is_read:false
 
 });
 
-alert(
-"Offer declined"
+toast(
+"Offer declined."
 );
 
 window.loadView(
@@ -9142,6 +13474,21 @@ document.getElementById(
 if(existing){
 existing.remove();
 }
+
+/* PHASE 5B.1Q — negotiation context: the dealership's offer is
+   shown above the seller's reply so the counter is always
+   presented against the original number. Reads the EXISTING
+   in-memory request/valuation only — no new data. */
+const request =
+(window.__TRADE_IN_REQUESTS__ || [])
+.find(r => r.id === requestId);
+
+const valuation =
+(request?.valuations || [])
+.find(v => v.id === valuationId);
+
+const dealershipOffer =
+Number(valuation?.amount || 0);
 
 document.body.insertAdjacentHTML(
 "beforeend",
@@ -9166,21 +13513,63 @@ onclick="this.remove()"
 class="
 bg-white
 rounded-[28px]
-p-6
+p-5 sm:p-6
 w-full
 max-w-xl
+max-h-[90vh]
+overflow-y-auto
 "
 onclick="event.stopPropagation()"
 >
 
-<h2 class="text-2xl font-bold mb-4">
+<div class="trade-counter-offer-head">
+
+<h2 class="text-2xl font-bold mb-1">
 Counter Offer
 </h2>
+
+<p class="trade-counter-offer-subtitle">
+Reply to the dealership's offer with your proposed price.
+</p>
+
+</div>
+
+<div class="trade-counter-offer-offer">
+
+<div class="min-w-0">
+
+<div class="trade-counter-offer-offer-label">
+Dealership's Offer
+</div>
+
+${valuation?.notes ? `
+<div class="trade-counter-offer-offer-note">
+${valuation.notes}
+</div>
+` : ""}
+
+</div>
+
+<div class="trade-counter-offer-offer-amount">
+R ${dealershipOffer.toLocaleString()}
+</div>
+
+</div>
+
+<label
+for="counterOfferAmount"
+class="trade-counter-offer-label"
+>
+Your Counter Amount
+</label>
 
 <input
 id="counterOfferAmount"
 type="number"
-placeholder="Requested Amount"
+min="1"
+step="1"
+placeholder="Enter your counter price"
+oninput="updateCounterOfferPreview()"
 class="
 w-full
 border
@@ -9188,13 +13577,27 @@ border-gray-300
 rounded-xl
 px-4
 py-3
-mb-4
+mb-3
 "
 />
 
+<div
+id="counterOfferPreview"
+class="trade-counter-offer-preview"
+>
+Your proposed counter offer: R 0
+</div>
+
+<label
+for="counterOfferMessage"
+class="trade-counter-offer-label"
+>
+Reply Message
+</label>
+
 <textarea
 id="counterOfferMessage"
-placeholder="Message"
+placeholder="Message to the dealership"
 class="
 w-full
 min-h-[120px]
@@ -9207,7 +13610,7 @@ mb-4
 "
 ></textarea>
 
-<div class="flex justify-end gap-3">
+<div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
 
 <button
 onclick="
@@ -9215,7 +13618,7 @@ document.getElementById(
 'counterOfferModal'
 ).remove()
 "
-class="btn btn-dark">
+class="btn btn-dark w-full sm:w-auto">
 Cancel
 </button>
 
@@ -9226,8 +13629,8 @@ submitCounterOffer(
 '${valuationId}'
 )
 "
-class="dashboard-primary-btn">
-Submit
+class="dashboard-primary-btn w-full sm:w-auto">
+Send Counter Offer
 </button>
 
 </div>
@@ -9238,6 +13641,35 @@ Submit
 
 `
 );
+
+updateCounterOfferPreview();
+
+};
+
+/* PHASE 5B.1Q — live preview of the seller's proposed counter so
+   the number is confirmed visually BEFORE it is submitted. */
+window.updateCounterOfferPreview = function(){
+
+const amount =
+Number(
+document.getElementById(
+"counterOfferAmount"
+)?.value
+);
+
+const preview =
+document.getElementById(
+"counterOfferPreview"
+);
+
+if(!preview){
+return;
+}
+
+preview.textContent =
+Number.isFinite(amount) && amount > 0
+? `Your proposed counter offer: R ${amount.toLocaleString()}`
+: "Your proposed counter offer: R 0";
 
 };
 
@@ -9379,8 +13811,8 @@ is_read:false
 
 });
 
-alert(
-"Counter offer submitted"
+toast(
+"Counter offer submitted."
 );
 
 window.loadView(
@@ -9577,6 +14009,10 @@ alert(
 return;
 }
 
+toast(
+"Counter offer accepted."
+);
+
 window.loadView(
 "tradeins",
 true
@@ -9676,6 +14112,10 @@ alert(
 return;
 }
 
+toast(
+"Counter offer rejected."
+);
+
 window.loadView(
 "tradeins",
 true
@@ -9713,12 +14153,195 @@ alert(
 return;
 }
 
-const amount =
-prompt(
-"Enter revised offer amount"
+const request =
+(window.__TRADE_IN_REQUESTS__ || [])
+.find(r => r.id === requestId);
+
+if(!request){
+return;
+}
+
+const valuation =
+(request.valuations || [])
+.find(v => v.id === valuationId);
+
+if(!valuation){
+alert("Valuation not found");
+return;
+}
+
+/* PHASE 5B.1Q — the revised offer is collected in an in-app
+   modal using the existing HUFA card styling instead of a
+   browser prompt(). The dealership's current offer is shown
+   above the amount input so the revision is always made
+   against the real number. */
+const existingReviseModal =
+document.getElementById(
+"reviseOfferModal"
 );
 
-if(!amount){
+if(existingReviseModal){
+existingReviseModal.remove();
+}
+
+document.body.insertAdjacentHTML(
+"beforeend",
+`
+
+<div
+id="reviseOfferModal"
+class="
+fixed
+inset-0
+bg-black/60
+z-[999999]
+flex
+items-center
+justify-center
+p-4
+"
+onclick="this.remove()"
+>
+
+<div
+class="
+bg-white
+rounded-[28px]
+p-5 sm:p-6
+w-full
+max-w-xl
+max-h-[90vh]
+overflow-y-auto
+"
+onclick="event.stopPropagation()"
+>
+
+<div class="trade-counter-offer-head">
+
+<h2 class="text-2xl font-bold mb-1">
+Revise Offer
+</h2>
+
+<p class="trade-counter-offer-subtitle">
+Send a revised price back to the seller.
+</p>
+
+</div>
+
+<div class="trade-counter-offer-offer">
+
+<div class="min-w-0">
+
+<div class="trade-counter-offer-offer-label">
+Current Offer
+</div>
+
+</div>
+
+<div class="trade-counter-offer-offer-amount">
+R ${Number(valuation.amount || 0).toLocaleString()}
+</div>
+
+</div>
+
+<label
+for="reviseOfferAmount"
+class="trade-counter-offer-label"
+>
+Revised Offer Amount
+</label>
+
+<input
+id="reviseOfferAmount"
+type="number"
+min="1"
+step="1"
+placeholder="Enter revised offer amount"
+class="
+w-full
+border
+border-gray-300
+rounded-xl
+px-4
+py-3
+mb-4
+"
+/>
+
+<div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
+
+<button
+onclick="
+document.getElementById(
+'reviseOfferModal'
+).remove()
+"
+class="btn btn-dark w-full sm:w-auto">
+Cancel
+</button>
+
+<button
+onclick="
+submitDealerRevisedOffer(
+'${requestId}',
+'${valuationId}'
+)
+"
+class="dashboard-primary-btn w-full sm:w-auto">
+Send Revised Offer
+</button>
+
+</div>
+
+</div>
+
+</div>
+
+`
+);
+
+};
+
+window.submitDealerRevisedOffer =
+async function(requestId, valuationId){
+
+const {
+data:{ user }
+} = await supabase.auth.getUser();
+
+if(!user){
+return;
+}
+
+const {
+data:profile
+} = await supabase
+.from("profiles")
+.select("account_type")
+.eq("id", user.id)
+.single();
+
+if(
+profile?.account_type !== "dealer"
+){
+alert(
+"Only dealers can perform this action"
+);
+return;
+}
+
+const amount =
+Number(
+document.getElementById(
+"reviseOfferAmount"
+)?.value
+);
+
+if(
+!Number.isFinite(amount) ||
+amount <= 0
+){
+alert("Enter a revised offer amount");
 return;
 }
 
@@ -9794,6 +14417,14 @@ alert(
 return;
 }
 
+document.getElementById(
+"reviseOfferModal"
+)?.remove();
+
+toast(
+"Offer revised."
+);
+
 window.loadView(
 "tradeins",
 true
@@ -9867,21 +14498,29 @@ console.log(
 window.editingTradeInIndex
 );
 
-setTimeout(()=>{
+setTimeout(async ()=>{
 
-document.getElementById(
-"tradeInMake"
-).value =
+/* PHASE 5B.1G — Make/Model are now shared-catalogue selects:
+   repopulate the SAME stored values through the Vehicle Details
+   cascade so the dependent Model list exists before the value is
+   set. Values, summary and submission payload are unchanged
+   (legacy free-text values the catalogue does not list are
+   preserved via the custom path / injected option). */
+try{
+await applyTradeInVehicleDraftCascade({
+tradeInMake:
 request.vehicleMake ||
 request.vehicle_make ||
-"";
-
-document.getElementById(
-"tradeInModel"
-).value =
+"",
+tradeInModel:
 request.vehicleModel ||
 request.vehicle_model ||
-"";
+""
+});
+}catch(_){
+/* Cascade is best-effort — the rest of the edit repopulate
+   (year, mileage, summary, images) below always runs. */
+}
 
 document.getElementById(
 "tradeInYear"
@@ -10007,7 +14646,10 @@ serviceCard
 );
 }
 
-const preview =
+    renderTradeInImagePreview();
+    return;
+
+    const preview =
 document.getElementById(
 "tradeInImagePreview"
 );
@@ -10718,6 +15360,16 @@ const DASHBOARD_PAGE_HEADINGS = {
     title: "Trade-In Centre",
     description: "Review and manage vehicle trade-in requests from potential buyers."
   },
+
+  /* PHASE 5B.1M — the full-page Trade-In workspace (the NEW/EDIT
+     request form). Uses the SAME shared page heading component every
+     dashboard page renders; keyed separately so the Trade-In Centre
+     heading above is completely untouched. */
+  tradeinform: {
+    title: "Trade-In Request",
+    description: "Complete your vehicle's details, photos and condition, choose the dealerships you want offers from, then submit your trade-in request."
+  },
+
   crm: {
     title: "CRM Leads",
     description: "Manage potential buyers, follow up on enquiries and move leads through your sales pipeline."
@@ -10762,6 +15414,13 @@ export function renderDashboardPageHeading(key){
 
 window.loadView = async function(view){
 
+/* PHASE 5B — the Trade-In Centre VIEW loading state (mounted by
+   the "tradeins" branch below) is released on EVERY exit path —
+   normal completion, early return or a thrown data error — so a
+   failed init can never leave an infinite loading screen. The
+   boot-sequence check keeps a modal's own overlay untouched. */
+try{
+
 if(
 window.__TRADEIN_SUBSCRIPTION__
 ){
@@ -10780,6 +15439,20 @@ view
 );
 
 if(!view) return;
+
+/* PHASE 5B.1M — LEAVING THE FULL-PAGE TRADE-IN WORKSPACE.
+   The form now lives inside the dashboard main area, so ANY dashboard
+   navigation (sidebar item, mobile burger menu) must close it through
+   the EXISTING leave path FIRST: pending draft text/image writes are
+   flushed and KEPT — exactly like the form's own Close — the Trade-In
+   Centre markup behind it becomes visible again, and the requested
+   view then renders normally over it. A no-op whenever no workspace
+   is open. */
+if(tradeInWorkspaceEl()){
+
+window.closeTradeInModal(null, true);
+
+}
 
 /* DASHBOARD MENU AUTO-CLOSE: close the mobile/tablet slide-in menu the
    moment navigation is triggered — INCLUDING when the currently active
@@ -10973,60 +15646,6 @@ aria-label="Primary dealership performance">
 </div>
 
 </section>
-
-<!-- DEALER NOTIFICATIONS (full width, directly under Lead & Customer Activity) -->
-<div class="dashboard-featured-panel">
-
-<div class="flex items-center justify-between mb-5">
-
-<div>
-
-<h2 class="text-xl font-bold">
-Notifications
-</h2>
-
-<p class="text-gray-500 text-sm">
-Realtime dealership alerts
-</p>
-
-</div>
-
-<button
-onclick="markAllDashboardNotificationsRead()"
-class="ov-markall-btn"
->
-Mark All Read
-</button>
-
-</div>
-
-<div
-id="dashboardNotifications"
-class="space-y-3 ov-collapse">
-
-<div class="
-flex
-justify-center
-items-center
-py-8
-">
-
-<div class="
-animate-spin
-rounded-full
-h-8
-w-8
-border-4
-border-[#E48A2F]
-border-t-transparent
-">
-</div>
-
-</div>
-
-</div>
-
-</div>
 
 <!-- OVERVIEW GRID -->
 <div class="
@@ -11819,6 +16438,16 @@ class="w-full min-w-0">
 
 if(view === "tradeins"){
 
+/* PHASE 5B / BUG1 — show the existing Trade-In Centre loading
+   state IMMEDIATELY while the view initializes (dashboard
+   refresh or navigation), before the first await. On a dashboard
+   refresh DashboardPage may already have painted the same overlay
+   synchronously; adopting it here keeps one current boot without
+   flicker or a reveal gap. It is released by the loadView
+   finally when initialization finishes (see
+   releaseTradeInCentreViewLoading). */
+mountTradeInCentreViewLoading();
+
 let isDealer = false;
 
 const {
@@ -11867,6 +16496,7 @@ ${
 ? `
 <button
 onclick="openTradeInModal()"
+id="tradeInPrimaryCta"
 class="
 dashboard-primary-btn
 w-full
@@ -13163,7 +17793,45 @@ true
 
 }
 
+/* PHASE 5B.1D — the Centre's primary CTA reflects whether a saved
+   NEW Trade-In draft exists for this signed-in customer: none →
+   "+ New Trade-In"; one (text fields and/or pending images) →
+   "Continue Trade-In". Reads ONLY the existing Phase 6A
+   loadDraft() and Phase 6B loadTradeInImageDraft() — no new
+   storage, and neither store is changed. */
+await refreshTradeInCentreCta();
+
+/* PHASE 5B.1D — refresh while the NEW Trade-In form was open:
+   reopen it through the EXISTING open path, which restores the
+   saved draft fields and pending images (order + cover intact).
+   The flag holds the owning user id only, and a modal already on
+   screen is never re-opened (a realtime view reload must not
+   reset the in-memory image list). */
+const tradeInOpenFormUserId =
+getTradeInNewFormOpenUserId();
+
+if(
+tradeInOpenFormUserId &&
+user &&
+tradeInOpenFormUserId === user.id &&
+!document.getElementById("tradeInModalOverlay")
+){
+
+openTradeInModal();
+
+}
+
 return;
+
+}
+
+}finally{
+
+/* PHASE 5B — release the Trade-In Centre VIEW loading state on
+   every exit path (normal completion, early return or a thrown
+   data error). A modal boot owns its own overlay and is never
+   touched here. */
+releaseTradeInCentreViewLoading();
 
 }
 
@@ -14635,6 +19303,140 @@ window.loadCRMLeads();
 
 };
 
+function renderCRMLeadTemperature(lead){
+
+const value =
+lead?.lead_temperature || "";
+
+const isPersistedEnquiry =
+!!lead?.id && !lead?.isInterest;
+
+const className =
+`crm-temperature-control crm-temperature-${value || "unclassified"}`;
+
+if(!isPersistedEnquiry){
+return `
+<div class="crm-temperature-field">
+<span class="crm-temperature-caption">LEAD TEMPERATURE · CHANGE CLASSIFICATION</span>
+<span class="${className} crm-temperature-readonly">Unclassified</span>
+</div>
+`;
+}
+
+return `
+<div class="crm-temperature-field">
+<span class="crm-temperature-caption">LEAD TEMPERATURE · CHANGE CLASSIFICATION</span>
+<select
+class="${className}"
+data-crm-temperature-lead="${lead.id}"
+data-current-value="${value}"
+aria-label="Lead temperature"
+title="Change lead temperature"
+onchange="window.updateLeadTemperature('${lead.id}', this.value, this)"
+>
+<option value="" ${value === "" ? "selected" : ""}>Unclassified</option>
+<option value="cold" ${value === "cold" ? "selected" : ""}>Cold Lead</option>
+<option value="warm" ${value === "warm" ? "selected" : ""}>Warm Lead</option>
+<option value="hot" ${value === "hot" ? "selected" : ""}>Hot Lead</option>
+</select>
+</div>
+`;
+
+}
+
+window.updateLeadTemperature = async function(leadId, value, control){
+
+const allowedValues = ["", "cold", "warm", "hot"];
+
+if(!leadId || !allowedValues.includes(value)){
+  if(control){
+    control.value = control.dataset.currentValue || "";
+  }
+  return;
+}
+
+const previousValue =
+control?.dataset.currentValue || "";
+
+const nextValue = value || null;
+
+if(control){
+  control.disabled = true;
+  control.setAttribute("aria-busy", "true");
+}
+
+try{
+
+const { data:userData, error:authError } =
+await supabase.auth.getUser();
+
+if(authError || !userData?.user?.id){
+  throw authError || new Error("Please sign in again to update this lead.");
+}
+
+const { data:savedLead, error } =
+await supabase
+.from("enquiries")
+.update({ lead_temperature: nextValue })
+.eq("id", leadId)
+.eq("seller_id", userData.user.id)
+.select("id,lead_temperature")
+.maybeSingle();
+
+if(error){
+  throw error;
+}
+
+if(!savedLead){
+  throw new Error("This lead could not be updated for this dealership.");
+}
+
+const savedValue = savedLead.lead_temperature || "";
+
+document
+.querySelectorAll("[data-crm-temperature-lead]")
+.forEach(select => {
+  if(select.dataset.crmTemperatureLead !== String(leadId)) return;
+  select.value = savedValue;
+  select.dataset.currentValue = savedValue;
+  select.classList.remove(
+    "crm-temperature-cold",
+    "crm-temperature-warm",
+    "crm-temperature-hot",
+    "crm-temperature-unclassified"
+  );
+  select.classList.add(`crm-temperature-${savedValue || "unclassified"}`);
+});
+
+}catch(err){
+
+console.error("Lead temperature update failed:", err);
+
+if(control){
+  control.value = previousValue;
+  control.dataset.currentValue = previousValue;
+  control.classList.remove(
+    "crm-temperature-cold",
+    "crm-temperature-warm",
+    "crm-temperature-hot",
+    "crm-temperature-unclassified"
+  );
+  control.classList.add(`crm-temperature-${previousValue || "unclassified"}`);
+}
+
+toast("Failed to save lead temperature. Please try again.");
+
+}finally{
+
+if(control){
+  control.disabled = false;
+  control.removeAttribute("aria-busy");
+}
+
+}
+
+};
+
 window.loadCRMLeads = async function(){
 
 const table =
@@ -14987,35 +19789,6 @@ lead.followUpClass =
 
 }
 
-/* LEAD PRIORITY */
-
-const isInterestLead =
-(lead.isInterest ||
- lead.lead_source === "vehicle_interest");
-
-if(lead.enquiryCount >= 5){
-
-lead.priorityLabel = "Hot Lead";
-lead.priorityClass =
-"bg-red-50 text-red-700 border border-red-200";
-
-}else if(
-  lead.enquiryCount >= 2 ||
-  isInterestLead
-){
-
-lead.priorityLabel = "Warm Lead";
-lead.priorityClass =
-"bg-yellow-50 text-yellow-700 border border-yellow-200";
-
-}else{
-
-lead.priorityLabel = "Cold Lead";
-lead.priorityClass =
-"bg-slate-50 text-slate-600 border border-slate-200";
-
-}
-
 });
 
 const newCount =
@@ -15259,7 +20032,7 @@ return `
 
 <div class="crm2-badges">
 
-<span class="crm-priority-pill ${l.priorityClass}">${l.priorityLabel}</span>
+${renderCRMLeadTemperature(l)}
 
 ${
 l.followUpLabel
@@ -15557,6 +20330,10 @@ CRM Leads / Lead Profile
 
 <span class="crm-status-pill crm-status-${(lead.status || "new").replace(/\s/g,"")} crm-status-pill-lg">${lead.status || "new"}</span>
 
+</div>
+
+<div class="crm-profile-temperature">
+${renderCRMLeadTemperature(lead)}
 </div>
 
 ${
@@ -16304,6 +21081,179 @@ await openLeadTasks(task.lead_id);
 };
 
 /* =========================================
+PHASE 6C — CRM NOTE DRAFT PERSISTENCE
+--------------------------------------------------------------------
+Reuses the existing user-scoped draftStore with workflow
+hufa:draft:crmNote:<userId>. One record per user holds a data
+map keyed by sanitized stable lead id (the existing leadId
+passed to openLeadNotes/saveLeadNote), so multiple leads keep
+separate drafts without composite ":" userKeys.
+
+- restore: when the CRM note interface for a lead renders
+- autosave: debounced (~600ms), single delegated listener
+- retain: on navigation/refresh/modal close
+- clear: only that lead's entry after successful note insert
+- failed insert retains; empty note removes only that lead
+========================================= */
+
+const CRM_NOTE_DRAFT_WORKFLOW = "crmNote";
+
+let crmNoteDraftSaveTimer = null;
+let crmNoteDraftPending = null;
+let crmNoteDraftActiveLeadKey = "";
+let crmNoteDraftListenerAttached = false;
+
+function sanitizeCrmNoteLeadKey(value){
+  const raw = String(value || "").trim();
+  if(!raw){ return ""; }
+  const cleaned = raw.replace(/[^A-Za-z0-9-_]/g, "_").slice(0, 80);
+  return cleaned.replace(/^_+|_+$/g, "") || "";
+}
+
+function isSafeCrmNoteDraftMap(value){
+  if(!value || typeof value !== "object" || Array.isArray(value)){
+    return false;
+  }
+  for(const key of Object.keys(value)){
+    if(key !== sanitizeCrmNoteLeadKey(key)){ return false; }
+    if(typeof value[key] !== "string"){ return false; }
+  }
+  return true;
+}
+
+async function removeCrmNoteDraftEntry(userId, leadKey){
+  try{
+    if(!userId || !leadKey){ return; }
+    const map = loadDraft(CRM_NOTE_DRAFT_WORKFLOW, userId);
+    if(!isSafeCrmNoteDraftMap(map)){ return; }
+    if(!Object.prototype.hasOwnProperty.call(map, leadKey)){ return; }
+    delete map[leadKey];
+    if(Object.keys(map).length){
+      saveDraft(CRM_NOTE_DRAFT_WORKFLOW, userId, map);
+    }else{
+      clearDraft(CRM_NOTE_DRAFT_WORKFLOW, userId);
+    }
+  }catch(_){
+    /* best-effort only */
+  }
+}
+
+async function persistCrmNoteDraftNow(){
+  try{
+    const pending = crmNoteDraftPending;
+    crmNoteDraftPending = null;
+    if(!pending || !pending.leadKey){ return; }
+    let text = typeof pending.text === "string" ? pending.text : "";
+    /* Prefer the live textarea value when it belongs to the same
+       lead, so an empty live box right after re-render cannot wipe
+       captured text before the async restore lands. */
+    if(crmNoteDraftActiveLeadKey === pending.leadKey){
+      const liveBox = document.getElementById("crmNewNote");
+      if(liveBox && typeof liveBox.value === "string"){
+        const live = liveBox.value;
+        if(live.trim()){
+          text = live;
+        }else if(!text.trim()){
+          text = "";
+        }
+      }
+    }
+    const user = await getAuthUser();
+    const userId = user && user.id;
+    if(!userId){ return; }
+    if(!text.trim()){
+      await removeCrmNoteDraftEntry(userId, pending.leadKey);
+      return;
+    }
+    const existing = loadDraft(CRM_NOTE_DRAFT_WORKFLOW, userId);
+    const safeMap = isSafeCrmNoteDraftMap(existing) ? existing : {};
+    safeMap[pending.leadKey] = text;
+    saveDraft(CRM_NOTE_DRAFT_WORKFLOW, userId, safeMap);
+  }catch(_){
+    /* draft persistence is best-effort only */
+  }
+}
+
+function scheduleCrmNoteDraftSave(leadId, capturedText){
+  const leadKey = sanitizeCrmNoteLeadKey(leadId);
+  if(!leadKey){ return; }
+  if(
+    crmNoteDraftPending &&
+    crmNoteDraftPending.leadKey !== leadKey
+  ){
+    if(crmNoteDraftSaveTimer){
+      clearTimeout(crmNoteDraftSaveTimer);
+      crmNoteDraftSaveTimer = null;
+    }
+    persistCrmNoteDraftNow();
+  }
+  crmNoteDraftPending = {
+    leadKey,
+    text: typeof capturedText === "string" ? capturedText : ""
+  };
+  if(crmNoteDraftSaveTimer){
+    clearTimeout(crmNoteDraftSaveTimer);
+  }
+  crmNoteDraftSaveTimer = setTimeout(()=>{
+    crmNoteDraftSaveTimer = null;
+    persistCrmNoteDraftNow();
+  }, 600);
+}
+
+async function restoreCrmNoteDraft(leadId){
+  try{
+    const leadKey = sanitizeCrmNoteLeadKey(leadId);
+    if(!leadKey){ return; }
+    crmNoteDraftActiveLeadKey = leadKey;
+    const noteBox = document.getElementById("crmNewNote");
+    if(!noteBox || noteBox.value){ return; }
+    const user = await getAuthUser();
+    if(!user || !user.id){ return; }
+    const map = loadDraft(CRM_NOTE_DRAFT_WORKFLOW, user.id);
+    if(!isSafeCrmNoteDraftMap(map)){ return; }
+    const text = map[leadKey];
+    if(typeof text === "string" && text){
+      noteBox.value = text;
+    }
+  }catch(_){
+    /* restore is best-effort only */
+  }
+}
+
+async function clearCrmNoteDraftForLead(leadId){
+  if(crmNoteDraftSaveTimer){
+    clearTimeout(crmNoteDraftSaveTimer);
+    crmNoteDraftSaveTimer = null;
+  }
+  crmNoteDraftPending = null;
+  const leadKey = sanitizeCrmNoteLeadKey(leadId);
+  if(!leadKey){ return; }
+  try{
+    const user = await getAuthUser();
+    if(!user || !user.id){ return; }
+    await removeCrmNoteDraftEntry(user.id, leadKey);
+  }catch(_){
+    /* best-effort clear */
+  }
+}
+
+function attachCrmNoteDraftListenerOnce(){
+  if(crmNoteDraftListenerAttached){ return; }
+  crmNoteDraftListenerAttached = true;
+  /* ONE delegated listener for every CRM notes render; rerenders
+     never re-register it, so no duplicate listeners. */
+  document.addEventListener("input", function(e){
+    const target = e && e.target;
+    if(!target || target.id !== "crmNewNote"){ return; }
+    if(!crmNoteDraftActiveLeadKey){ return; }
+    scheduleCrmNoteDraftSave(
+      crmNoteDraftActiveLeadKey,
+      typeof target.value === "string" ? target.value : ""
+    );
+  });
+}
+
+/* =========================================
 CRM NOTES
 ========================================= */
 
@@ -16476,6 +21426,9 @@ Save Note
 </div>
 
 `;
+
+attachCrmNoteDraftListenerOnce();
+await restoreCrmNoteDraft(leadId);
 
 };
 
@@ -17028,6 +21981,7 @@ mb-3
 
 ${a.vehicle_make || ""}
 ${a.vehicle_model || ""}
+${a.vehicle_year ? " " + a.vehicle_year : ""}
 
 </h3>
 
@@ -17061,6 +22015,16 @@ ${a.surname || ""}
 <p>
 <b>Email:</b>
 ${a.email || "-"}
+</p>
+
+<p>
+<b>Contact:</b>
+${a.phone || "-"}
+</p>
+
+<p>
+<b>Vehicle Price:</b>
+R ${Number(a.price || 0).toLocaleString()}
 </p>
 
 <p>
@@ -17710,6 +22674,44 @@ Draft
 
 </select>
 
+<div class="relative inventory-make-dropdown" id="inventoryMakeDropdown">
+  <button type="button" id="inventoryMakeBtn" class="dashboard-select">All Makes</button>
+  <div id="inventoryMakePanel" class="hidden absolute z-50 mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-2">
+    <input id="inventoryMakeSearch" type="text" placeholder="Search makes..." class="w-full mb-2 px-2 py-1 border rounded" />
+    <div class="flex gap-2 mb-2">
+      <button type="button" id="inventoryMakeSelectAll" class="text-xs px-2 py-1 border rounded">Select All</button>
+      <button type="button" id="inventoryMakeClear" class="text-xs px-2 py-1 border rounded">Clear</button>
+    </div>
+    <div id="inventoryMakeOptions" class="max-h-48 overflow-auto space-y-1"></div>
+    <button type="button" id="inventoryMakeApply" class="mt-2 w-full text-xs px-2 py-1 bg-[#E48A2F] text-white rounded">Apply</button>
+  </div>
+</div>
+
+<select
+id="inventoryModelFilter"
+class="
+dashboard-select
+">
+
+<option value="all">
+All Models
+</option>
+
+</select>
+
+<div class="relative inventory-body-dropdown" id="inventoryBodyDropdown">
+  <button type="button" id="inventoryBodyBtn" class="dashboard-select">All Body Types</button>
+  <div id="inventoryBodyPanel" class="hidden absolute z-50 mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-2">
+    <input id="inventoryBodySearch" type="text" placeholder="Search body types..." class="w-full mb-2 px-2 py-1 border rounded" />
+    <div class="flex gap-2 mb-2">
+      <button type="button" id="inventoryBodySelectAll" class="text-xs px-2 py-1 border rounded">Select All</button>
+      <button type="button" id="inventoryBodyClear" class="text-xs px-2 py-1 border rounded">Clear</button>
+    </div>
+    <div id="inventoryBodyOptions" class="max-h-48 overflow-auto space-y-1"></div>
+    <button type="button" id="inventoryBodyApply" class="mt-2 w-full text-xs px-2 py-1 bg-[#E48A2F] text-white rounded">Apply</button>
+  </div>
+</div>
+
 <select
 id="inventorySort"
 class="
@@ -17891,7 +22893,10 @@ sessionStorage.getItem(
 
 search: "",
 status: "all",
-sort: "newest"
+sort: "newest",
+make: "all",
+model: "all",
+body: "all"
 
 };
 
@@ -17904,6 +22909,15 @@ window.__inventoryFilters.status;
 
 const sortType =
 window.__inventoryFilters.sort;
+
+const makeFilter =
+window.__inventoryFilters.make || "all";
+
+const modelFilter =
+window.__inventoryFilters.model || "all";
+
+const bodyFilter =
+window.__inventoryFilters.body || "all";
 
 /* SEARCH */
 
@@ -17991,6 +23005,29 @@ filteredVehicles.filter(v =>
 .toLowerCase() === statusFilter
 );
 
+}
+
+/* MAKE */
+const makeVals = String(makeFilter).split(",").map(v=>v.trim().toLowerCase()).filter(v=>v && v !== "all");
+if(makeVals.length){
+filteredVehicles = filteredVehicles.filter(v =>
+makeVals.includes(String(v.make || "").trim().toLowerCase())
+);
+}
+
+/* MODEL */
+if(modelFilter && modelFilter !== "all"){
+filteredVehicles = filteredVehicles.filter(v =>
+String(v.model || "").trim().toLowerCase() === String(modelFilter).trim().toLowerCase()
+);
+}
+
+/* BODY TYPE */
+const bodyVals = String(bodyFilter).split(",").map(v=>v.trim().toLowerCase()).filter(v=>v && v !== "all");
+if(bodyVals.length){
+filteredVehicles = filteredVehicles.filter(v =>
+bodyVals.includes(String(v.body_type || v.bodyType || v.body || "").trim().toLowerCase())
+);
 }
 
 /* SORTING */
@@ -18576,7 +23613,317 @@ document.getElementById(
 "inventorySort"
 );
 
-[search,status,sort]
+const makeSel = null;
+
+const modelSel =
+document.getElementById(
+"inventoryModelFilter"
+);
+
+const bodySel = null;
+
+/* Populate Make/Model/Body options from user inventory */
+function norm(v){ return String(v || "").trim(); }
+function countBy(list, fn){
+  const m = {};
+  list.forEach(v => {
+    const key = fn(v);
+    if(!key) return;
+    m[key] = (m[key] || 0) + 1;
+  });
+  return m;
+}
+const makeCounts = countBy(vehicles || [], v => norm(v.make));
+const bodyCounts = countBy(vehicles || [], v => norm(v.body_type || v.bodyType || v.body));
+const selectedMakes = (window.__inventoryFilters.make || "all").split(",").map(v=>v.trim()).filter(v=>v && v !== "all");
+/* Make population moved to custom dropdown below */
+const selectedBodies = (window.__inventoryFilters.body || "all").split(",").map(v=>v.trim()).filter(v=>v && v !== "all");
+/* Body population moved to custom dropdown below */
+if(modelSel){
+  const allModels = (vehicles || []).filter(v => {
+    if(!selectedMakes.length) return true;
+    return selectedMakes.map(x=>x.toLowerCase()).includes(norm(v.make).toLowerCase());
+  });
+  const modelCounts = countBy(allModels, v => norm(v.model));
+  const selected = modelSel.value || window.__inventoryFilters.model || "all";
+  modelSel.innerHTML = `<option value="all">All Models</option>` +
+    Object.keys(modelCounts).sort((a,b)=>a.localeCompare(b)).map(m =>
+      `<option value="${m}">${m} (${modelCounts[m]})</option>`
+    ).join("");
+  modelSel.value = (selected && selected !== "all" && modelCounts[selected]) ? selected : "all";
+}
+
+/* Custom Make/Body dropdown wiring */
+/* Inventory filter visual polish — injected once, scoped to inventory Make/Body dropdowns only */
+if (!document.getElementById("inventoryFilterStyles")) {
+  const invStyle = document.createElement("style");
+  invStyle.id = "inventoryFilterStyles";
+  invStyle.textContent = `
+/* Panel proportions — wider, responsive, no clipping */
+#inventoryMakeDropdown #inventoryMakePanel,
+#inventoryBodyDropdown #inventoryBodyPanel {
+  min-width: 300px;
+  max-width: min(440px, 92vw);
+  width: auto;
+  padding: 12px;
+  border-radius: 12px;
+}
+
+/* Search field — comfortably wide, homepage-aligned padding/typography/focus */
+#inventoryMakeDropdown #inventoryMakeSearch,
+#inventoryBodyDropdown #inventoryBodySearch {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+#inventoryMakeDropdown #inventoryMakeSearch:focus-visible,
+#inventoryBodyDropdown #inventoryBodySearch:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+  border-color: #0A58FF;
+}
+
+/* Select All / Clear — horizontal row, balanced padding, distinct from Apply */
+#inventoryMakeDropdown .flex.gap-2.mb-2,
+#inventoryBodyDropdown .flex.gap-2.mb-2 {
+  gap: 10px;
+  margin-bottom: 10px;
+  display: flex;
+}
+#inventoryMakeDropdown #inventoryMakeSelectAll,
+#inventoryMakeDropdown #inventoryMakeClear,
+#inventoryBodyDropdown #inventoryBodySelectAll,
+#inventoryBodyDropdown #inventoryBodyClear {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6B7280;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+}
+#inventoryMakeDropdown #inventoryMakeSelectAll:hover,
+#inventoryMakeDropdown #inventoryMakeClear:hover,
+#inventoryBodyDropdown #inventoryBodySelectAll:hover,
+#inventoryBodyDropdown #inventoryBodyClear:hover {
+  background: #f3f4f6;
+  border-color: #cbd5e1;
+  color: #0A192F;
+}
+#inventoryMakeDropdown #inventoryMakeSelectAll:focus-visible,
+#inventoryMakeDropdown #inventoryMakeClear:focus-visible,
+#inventoryBodyDropdown #inventoryBodySelectAll:focus-visible,
+#inventoryBodyDropdown #inventoryBodyClear:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+}
+
+/* Option list — scrollable, sensible max height */
+#inventoryMakeDropdown #inventoryMakeOptions,
+#inventoryBodyDropdown #inventoryBodyOptions {
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Option rows — readable labels, visible counts, consistent spacing */
+#inventoryMakeDropdown label,
+#inventoryBodyDropdown label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+#inventoryMakeDropdown label:hover,
+#inventoryBodyDropdown label:hover {
+  background: #f1f5f9;
+}
+
+/* Checkbox accent — brand blue */
+#inventoryMakeDropdown input[type="checkbox"].make-cb,
+#inventoryBodyDropdown input[type="checkbox"].body-cb {
+  accent-color: #0A58FF;
+}
+#inventoryMakeDropdown input[type="checkbox"].make-cb:focus-visible,
+#inventoryBodyDropdown input[type="checkbox"].body-cb:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Apply button — blue primary action, full width but well-proportioned */
+#inventoryMakeDropdown #inventoryMakeApply,
+#inventoryBodyDropdown #inventoryBodyApply {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #0A58FF;
+  border: 1px solid #0A58FF;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  margin-top: 10px;
+  box-sizing: border-box;
+}
+#inventoryMakeDropdown #inventoryMakeApply:hover,
+#inventoryBodyDropdown #inventoryBodyApply:hover {
+  background: #0a4ed1;
+  border-color: #0a4ed1;
+}
+#inventoryMakeDropdown #inventoryMakeApply:focus-visible,
+#inventoryBodyDropdown #inventoryBodyApply:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+}
+`;
+  document.head.appendChild(invStyle);
+}
+
+const makeBtn = document.getElementById("inventoryMakeBtn");
+const makePanel = document.getElementById("inventoryMakePanel");
+const makeSearch = document.getElementById("inventoryMakeSearch");
+const makeOptions = document.getElementById("inventoryMakeOptions");
+const makeSelectAll = document.getElementById("inventoryMakeSelectAll");
+const makeClear = document.getElementById("inventoryMakeClear");
+const makeApply = document.getElementById("inventoryMakeApply");
+
+const bodyBtn = document.getElementById("inventoryBodyBtn");
+const bodyPanel = document.getElementById("inventoryBodyPanel");
+const bodySearch = document.getElementById("inventoryBodySearch");
+const bodyOptions = document.getElementById("inventoryBodyOptions");
+const bodySelectAll = document.getElementById("inventoryBodySelectAll");
+const bodyClear = document.getElementById("inventoryBodyClear");
+const bodyApply = document.getElementById("inventoryBodyApply");
+
+let pendingMakes = (window.__inventoryFilters.make || "all").split(",").map(v=>v.trim()).filter(v=>v && v !== "all");
+let pendingBodies = (window.__inventoryFilters.body || "all").split(",").map(v=>v.trim()).filter(v=>v && v !== "all");
+
+function renderMakeCheckboxes(q){
+  if(!makeOptions) return;
+  const term = String(q || "").toLowerCase();
+  makeOptions.innerHTML = Object.keys(makeCounts).sort((a,b)=>a.localeCompare(b))
+    .filter(m => !term || m.toLowerCase().includes(term))
+    .map(m => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="make-cb" value="${m}" ${pendingMakes.includes(m)?"checked":""} /> ${m} (${makeCounts[m]})</label>`).join("");
+}
+function renderBodyCheckboxes(q){
+  if(!bodyOptions) return;
+  const term = String(q || "").toLowerCase();
+  bodyOptions.innerHTML = Object.keys(bodyCounts).sort((a,b)=>a.localeCompare(b))
+    .filter(b => !term || b.toLowerCase().includes(term))
+    .map(b => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="body-cb" value="${b}" ${pendingBodies.includes(b)?"checked":""} /> ${b} (${bodyCounts[b]})</label>`).join("");
+}
+
+renderMakeCheckboxes("");
+renderBodyCheckboxes("");
+
+if(makeBtn) makeBtn.textContent = pendingMakes.length ? `Makes (${pendingMakes.length})` : "All Makes";
+if(bodyBtn) bodyBtn.textContent = pendingBodies.length ? `Body Types (${pendingBodies.length})` : "All Body Types";
+
+if(makeBtn && makePanel){
+  makeBtn.onclick = (e) => { e.stopPropagation(); makePanel.classList.toggle("hidden"); };
+}
+if(makeSearch){
+  makeSearch.oninput = () => renderMakeCheckboxes(makeSearch.value);
+}
+if(makeSelectAll){
+  makeSelectAll.onclick = () => { pendingMakes = Object.keys(makeCounts); renderMakeCheckboxes(makeSearch ? makeSearch.value : ""); if(makeBtn) makeBtn.textContent = pendingMakes.length ? `Makes (${pendingMakes.length})` : "All Makes"; };
+}
+if(makeClear){
+  makeClear.onclick = () => { pendingMakes = []; renderMakeCheckboxes(makeSearch ? makeSearch.value : ""); if(makeBtn) makeBtn.textContent = "All Makes"; };
+}
+if(makeOptions){
+  makeOptions.onchange = (e) => {
+    if(e.target && e.target.classList && e.target.classList.contains("make-cb")){
+      const val = e.target.value;
+      if(e.target.checked){ if(!pendingMakes.includes(val)) pendingMakes.push(val); }
+      else { pendingMakes = pendingMakes.filter(v => v !== val); }
+      if(makeBtn) makeBtn.textContent = pendingMakes.length ? `Makes (${pendingMakes.length})` : "All Makes";
+    }
+  };
+}
+if(makeApply){
+  makeApply.onclick = () => {
+    window.__inventoryFilters.make = pendingMakes.length ? pendingMakes.join(",") : "all";
+    sessionStorage.setItem("inventoryFilters", JSON.stringify(window.__inventoryFilters));
+    renderInventoryResults();
+  };
+}
+
+if(bodyBtn && bodyPanel){
+  bodyBtn.onclick = (e) => { e.stopPropagation(); bodyPanel.classList.toggle("hidden"); };
+}
+if(bodySearch){
+  bodySearch.oninput = () => renderBodyCheckboxes(bodySearch.value);
+}
+if(bodySelectAll){
+  bodySelectAll.onclick = () => { pendingBodies = Object.keys(bodyCounts); renderBodyCheckboxes(bodySearch ? bodySearch.value : ""); if(bodyBtn) bodyBtn.textContent = pendingBodies.length ? `Body Types (${pendingBodies.length})` : "All Body Types"; };
+}
+if(bodyClear){
+  bodyClear.onclick = () => { pendingBodies = []; renderBodyCheckboxes(bodySearch ? bodySearch.value : ""); if(bodyBtn) bodyBtn.textContent = "All Body Types"; };
+}
+if(bodyOptions){
+  bodyOptions.onchange = (e) => {
+    if(e.target && e.target.classList && e.target.classList.contains("body-cb")){
+      const val = e.target.value;
+      if(e.target.checked){ if(!pendingBodies.includes(val)) pendingBodies.push(val); }
+      else { pendingBodies = pendingBodies.filter(v => v !== val); }
+      if(bodyBtn) bodyBtn.textContent = pendingBodies.length ? `Body Types (${pendingBodies.length})` : "All Body Types";
+    }
+  };
+}
+if(bodyApply){
+  bodyApply.onclick = () => {
+    window.__inventoryFilters.body = pendingBodies.length ? pendingBodies.join(",") : "all";
+    sessionStorage.setItem("inventoryFilters", JSON.stringify(window.__inventoryFilters));
+    renderInventoryResults();
+  };
+}
+
+if(!window.__inventoryDropdownGlobalBound){
+  window.__inventoryDropdownGlobalBound = true;
+  document.addEventListener("click", (e) => {
+    const makeRoot = document.getElementById("inventoryMakeDropdown");
+    const makeP = document.getElementById("inventoryMakePanel");
+    if(makeRoot && makeP && !makeP.classList.contains("hidden") && !makeRoot.contains(e.target)){
+      makeP.classList.add("hidden");
+    }
+    const bodyRoot = document.getElementById("inventoryBodyDropdown");
+    const bodyP = document.getElementById("inventoryBodyPanel");
+    if(bodyRoot && bodyP && !bodyP.classList.contains("hidden") && !bodyRoot.contains(e.target)){
+      bodyP.classList.add("hidden");
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if(e.key === "Escape"){
+      const makeP = document.getElementById("inventoryMakePanel");
+      const bodyP = document.getElementById("inventoryBodyPanel");
+      if(makeP) makeP.classList.add("hidden");
+      if(bodyP) bodyP.classList.add("hidden");
+    }
+  });
+}
+
+[search,status,sort,makeSel,modelSel,bodySel]
 .forEach(el=>{
 
 if(!el) return;
@@ -18643,6 +23990,26 @@ status?.value || "all";
 
 window.__inventoryFilters.sort =
 sort?.value || "newest";
+
+const selectedMakeVals = Array.from(makeSel?.selectedOptions || []).map(o=>o.value).filter(v=>v && v !== "all");
+window.__inventoryFilters.make = selectedMakeVals.length ? selectedMakeVals.join(",") : "all";
+
+window.__inventoryFilters.body = (() => {
+  const vals = Array.from(bodySel?.selectedOptions || []).map(o=>o.value).filter(v=>v && v !== "all");
+  return vals.length ? vals.join(",") : "all";
+})();
+
+/* Clear invalid model if make changed */
+if(makeSel){
+  const selectedMks = Array.from(makeSel.selectedOptions || []).map(o=>o.value).filter(v=>v && v !== "all").map(v=>v.toLowerCase());
+  const modelsForMake = (vehicles || []).filter(v => selectedMks.length === 0 || selectedMks.includes(norm(v.make).toLowerCase())).map(v => norm(v.model).toLowerCase());
+  if((window.__inventoryFilters.model || "all") !== "all" && !modelsForMake.includes(String(window.__inventoryFilters.model).toLowerCase())){
+    window.__inventoryFilters.model = "all";
+    if(modelSel) modelSel.value = "all";
+  }
+}
+window.__inventoryFilters.model =
+modelSel?.value || "all";
 
 sessionStorage.setItem(
 "inventoryFilters",
@@ -21910,7 +27277,7 @@ let rows = [...cached.vehicles];
 const filters =
 window.__inventoryFilters ||
 JSON.parse(sessionStorage.getItem("inventoryFilters")) ||
-{ search:"", status:"all", sort:"newest" };
+{ search:"", status:"all", sort:"newest", make:"all", model:"all", body:"all" };
 
 /* SEARCH — same haystack rules as the live list */
 const searchValue =

@@ -7,6 +7,10 @@ import {
   normalizeEditSocialValue
 } from "../js/socialProfile.js";
 import {
+  getProvinces,
+  getCities
+} from "../js/catalog.js";
+import {
   validateImageFile
 } from "../js/fileValidation.js";
 import {
@@ -17,10 +21,11 @@ import {
 } from "../js/passwordPolicy.js";
 import { showWelcomeScreen } from "../components/welcomeScreen.js";
 import {
-  savePageState,
-  loadPageState,
-  clearPageState
-} from "../js/stateManager.js";
+  saveDraft as saveDraftRecord,
+  loadDraft as loadDraftRecord,
+  clearDraft as clearDraftRecord,
+  getOrCreateAnonDraftId
+} from "../js/draftStore.js";
 
 /* PHASE 7 — Profile card avatar state. Reuses the
    SAME validation rules, "profile-images" bucket,
@@ -44,18 +49,170 @@ let signupAvatarFile = null;
    The signup template holds state ONLY in the DOM, and
    router() rewrites #app on authChanged/popstate re-renders.
    This preserves the user's NON-SENSITIVE entries in the
-   EXISTING sessionStorage-backed state manager
-   (js/stateManager.js) so a same-tab re-render restores them.
+   sessionStorage-backed draft foundation
+   (js/draftStore.js) so a same-tab re-render restores them.
    SECURITY: passwords, password confirmation, File objects,
    avatar/image data, tokens and credentials are NEVER stored. */
 
-const SIGNUP_DRAFT_KEY = "signup";
+const SIGNUP_DRAFT_WORKFLOW = "signup";
 
-/* PHASE 2 (persistence fix) — canonical SA province list + normalizer.
-   Single source for validating the two signup province selects
-   (dealerProvince / profileProvince). Only a valid canonical value
-   may be written to auth metadata as the single `province` key.
-   Returns the canonical name or "" (invalid/blank). */
+/* PHASE 1 — signup drafts use the shared draftStore
+foundation (hufa:draft:signup:<anonId>). The anon id is a
+random per-tab value (never personal data, never a shared
+"anon" bucket), so same-tab refresh/navigation restores
+the draft while a new tab never inherits it. */
+const SIGNUP_LEGACY_STORAGE_KEY = "state:signup";
+
+function signupUserKey(){
+
+  const anonId = getOrCreateAnonDraftId();
+
+  return typeof anonId === "string" && anonId
+    ? anonId
+    : "anon";
+
+}
+
+/* Existing signup draft allowlist — non-sensitive fields
+only. Passwords, avatar File, tokens, MFA are never here. */
+const SIGNUP_DRAFT_ALLOWLIST = new Set([
+  "name",
+  "surname",
+  "email",
+  "accountType",
+  /* PHASE 3 — merged-record aliases. collectSignupDraft() now persists
+     the WHOLE form in ONE record; historic per-section drafts may carry
+     these snake_case keys. Same draftStore foundation, no second system. */
+  "account_type",
+  "dealership",
+  "dealerEmail",
+  "dealer_email",
+  "dealerPhone",
+  "dealer_phone",
+  "dealerAddress",
+  "dealer_address",
+  "dealerProvince",
+    "dealerCity",
+  "dealer_city",
+  "profileProvince",
+  "profileCity",
+  "provinceUserSelected",
+  "profile_province",
+  "profile_city",
+  "mobileNumber",
+  "phone",
+  "whatsappNumber",
+  "alternativeContact",
+  "profileBio",
+  "profileLocation",
+  "profileWebsite",
+  "socialLinks",
+  "socials",
+  "package"
+]);
+
+function isSafeSignupDraft(value){
+
+  if(
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ){
+    return false;
+  }
+
+  for(const key of Object.keys(value)){
+
+    if(!SIGNUP_DRAFT_ALLOWLIST.has(key)){
+      return false;
+    }
+
+    if(key === "socialLinks"){
+
+      if(
+        !value[key] ||
+        typeof value[key] !== "object" ||
+        Array.isArray(value[key])
+      ){
+        return false;
+      }
+
+      for(const sk of Object.keys(value[key])){
+        if(typeof value[key][sk] !== "string"){
+          return false;
+        }
+      }
+
+      continue;
+
+    }
+
+    if(typeof value[key] !== "string"){
+      return false;
+    }
+
+  }
+
+  return true;
+
+}
+
+/* One-time safe migration: read the old state:signup key
+once, keep only allowlisted strings, write it to the new
+key, then remove the old key only after a successful
+write. Never migrates passwords (they were never stored)
+or File/Blob data. */
+function migrateLegacySignupDraftOnce(){
+
+  let raw = null;
+
+  try{
+    raw = sessionStorage.getItem(SIGNUP_LEGACY_STORAGE_KEY);
+  }catch(e){
+    return;
+  }
+
+  if(!raw){
+    return;
+  }
+
+  let parsed = null;
+
+  try{
+    parsed = JSON.parse(raw);
+  }catch(e){
+    return;
+  }
+
+  if(!isSafeSignupDraft(parsed)){
+    return;
+  }
+
+  const ok = saveDraftRecord(
+    SIGNUP_DRAFT_WORKFLOW,
+    signupUserKey(),
+    parsed,
+    { accountType: parsed.accountType || parsed.account_type || "" }
+  );
+
+  if(!ok){
+    return;
+  }
+
+  try{
+    sessionStorage.removeItem(SIGNUP_LEGACY_STORAGE_KEY);
+  }catch(e){}
+
+}
+
+/* PHASE 2 — Province → City cascading (shared catalogue).
+   SAME pattern as Upload Vehicle (fillProvinces/fillCities)
+   and Browse (fillProvinces/populateCities): province
+   options from getProvinces(); city options for the
+   selected province from getCities(province). No hard-coded
+   maps. Changing province clears an invalid city and
+   repopulates. Normalizer retained ONLY for validating the
+   value written to auth metadata. */
 const SIGNUP_PROVINCES = [
   "Gauteng",
   "Western Cape",
@@ -88,11 +245,63 @@ function normalizeProvinceName(value){
 
 }
 
+/* PHASE 3 — snake_case aliases accepted by the signup draft
+   allowlist, mapped onto their canonical camelCase keys. */
+const SIGNUP_DRAFT_KEY_ALIASES = {
+  account_type: "accountType",
+  dealer_email: "dealerEmail",
+  dealer_phone: "dealerPhone",
+  dealer_address: "dealerAddress",
+  dealer_city: "dealerCity",
+  profile_province: "profileProvince",
+  profile_city: "profileCity"
+};
+
+/* Normalizes legacy snake_case draft keys ONCE at load so every
+   reader (static restore, location restore, social restore) uses
+   one canonical shape. camelCase wins; an alias only fills a
+   canonical key the record does not already carry. */
+function normalizeSignupDraftKeys(saved){
+
+  let normalized = null;
+
+  for(const alias of Object.keys(SIGNUP_DRAFT_KEY_ALIASES)){
+
+    const aliasValue = saved[alias];
+
+    if(typeof aliasValue !== "string" || !aliasValue){
+      continue;
+    }
+
+    normalized = normalized || { ...saved };
+
+    const canonical = SIGNUP_DRAFT_KEY_ALIASES[alias];
+
+    if(
+      typeof normalized[canonical] !== "string" ||
+      !normalized[canonical]
+    ){
+      normalized[canonical] = aliasValue;
+    }
+
+    delete normalized[alias];
+
+  }
+
+  return normalized || saved;
+
+}
+
 let signupDraftSaveTimer = null;
 
 function loadSignupDraft(){
 
-  const saved = loadPageState(SIGNUP_DRAFT_KEY);
+  migrateLegacySignupDraftOnce();
+
+  const saved = loadDraftRecord(
+    SIGNUP_DRAFT_WORKFLOW,
+    signupUserKey()
+  );
 
   if(
     !saved ||
@@ -102,7 +311,7 @@ function loadSignupDraft(){
     return null;
   }
 
-  return saved;
+  return normalizeSignupDraftKeys(saved);
 
 }
 
@@ -150,9 +359,272 @@ function setSelectValue(id, value){
 
 }
 
-/* Restores static (non-social) draft fields. The explicit
-   ?account=private|dealer preset — an intentional navigation
-   choice — takes precedence over a saved account type. */
+/* PHASE 2 — Province → City cascading helpers.
+   SAME pattern as Upload Vehicle fillProvinces/fillCities
+   (pages/uploadVehicle.js): province options from
+   getProvinces(); cities for the selected province from
+   getCities(province); changing province clears an invalid
+   previous city. */
+
+function fillProvinceOptions(select, provinces){
+
+  if(!select){
+    return;
+  }
+
+  const current = select.value || "";
+
+  select.innerHTML = "";
+
+  const placeholder =
+    document.createElement("option");
+
+  placeholder.value = "";
+
+  placeholder.textContent = "Select Province";
+
+  select.appendChild(placeholder);
+
+  (provinces || []).forEach((item)=>{
+
+    const value =
+      typeof item === "string"
+        ? item
+        : item?.value;
+
+    if(!value){
+      return;
+    }
+
+    const option =
+      document.createElement("option");
+
+    option.value = value;
+
+    option.textContent = value;
+
+    select.appendChild(option);
+
+  });
+
+  if(current){
+    select.value = current;
+  }
+
+}
+
+async function fillCityOptions(citySelect, province, preserveCity){
+
+  if(!citySelect){
+    return;
+  }
+
+  if(!province){
+
+    citySelect.innerHTML =
+      `<option value="">
+        Select Province First
+      </option>`;
+
+    citySelect.disabled = true;
+
+    return;
+
+  }
+
+  let cities = [];
+
+  try{
+    cities = await getCities(province) || [];
+  }catch(e){
+    cities = [];
+  }
+
+  citySelect.innerHTML =
+    `<option value="">
+      Select City
+    </option>`;
+
+  cities.forEach((item)=>{
+
+    const value =
+      typeof item === "string"
+        ? item
+        : item?.value;
+
+    if(!value){
+      return;
+    }
+
+    const option =
+      document.createElement("option");
+
+    option.value = value;
+
+    option.textContent = value;
+
+    citySelect.appendChild(option);
+
+  });
+
+  citySelect.disabled = false;
+
+  /* Preserve only when the saved city is valid for the
+     newly selected province; otherwise stay cleared. */
+  if(preserveCity){
+
+    const exists =
+      cities.some((item)=>{
+
+        const value =
+          typeof item === "string"
+            ? item
+            : item?.value;
+
+        return value === preserveCity;
+
+      });
+
+    if(exists){
+      citySelect.value = preserveCity;
+    }
+
+  }
+
+}
+
+/* Populates the ONE shared signup province select from the shared
+   catalogue, then restores draft province/city WITHOUT loading
+   cities twice. Called ONCE per initSignup. */
+async function initSignupLocations(saved){
+
+  /* ONE shared location control set for ALL signup accounts
+     (Private Seller and Dealership alike) — no dealer/private
+     duplicates. */
+
+  const provinceEl =
+    document.getElementById("locationProvince");
+  const cityEl =
+    document.getElementById("locationCity");
+  const locationEl =
+    document.getElementById("locationText");
+
+  /* EXISTING signup form (used by the draft autosave below). */
+  const form =
+    document.getElementById("signupForm");
+
+  /* Shared catalogue list — function scoped so it is never an
+     implicit global. */
+  let provinces = [];
+
+  try{
+    provinces = await getProvinces() || [];
+  }catch(e){
+    provinces = [];
+  }
+
+  /* Catalogue failure fallback: keep the minimal valid
+     canonical list so the required province value can
+     still be chosen. Cities stay catalogue-driven. */
+  if(!provinces.length){
+    provinces = SIGNUP_PROVINCES.slice();
+  }
+
+  /* Populate the ONE shared province select from the shared
+     catalogue. */
+  fillProvinceOptions(provinceEl, provinces);
+
+  /* Signup default: NO province is auto-selected on initial
+     load — the shared Province select shows the "Select
+     Province" placeholder until the user chooses one. City
+     remains disabled ("Select Province First") until then.
+     The Province → City cascade below populates City as soon
+     as a province is selected. */
+
+  /* Province first, then cities for that province, then
+     the previously saved valid city (draft restore).
+     Saved provinces are normalized to the canonical form
+     so a draft always matches the catalogue option value. */
+
+  /* Draft restore — the shared Province/City are saved under the
+     existing dealer and profile draft keys (both aliases hold the
+     SAME shared values), so whichever alias exists is restored. */
+  const savedProvince =
+    normalizeProvinceName(
+      saved?.dealerProvince || saved?.profileProvince || ""
+    );
+  const savedCity =
+    (saved?.dealerCity || saved?.profileCity || "").trim();
+
+  /* Restore the province ONLY if the user genuinely selected
+     one (marker written by the province change listener).
+     Drafts saved by the legacy build auto-inserted the first
+     catalogue province (e.g. Eastern Cape) without any user
+     action — those carry no marker and are ignored here, so a
+     fresh signup starts at "Select Province". */
+  if(savedProvince && provinceEl && saved?.provinceUserSelected === "1"){
+    provinceEl.value = savedProvince;
+    /* Re-arm the marker so subsequent autosaves keep trusting
+       this user-chosen province on later reloads. */
+    form.dataset.provinceUserSelected = "1";
+  }
+
+  if(provinceEl?.value){
+    await fillCityOptions(
+      cityEl,
+      provinceEl.value,
+      savedCity
+    );
+  }
+
+  /* Wire the EXISTING Province → City cascade ONCE for the shared
+     controls. Changing Province clears an invalid City and
+     repopulates from the new province's catalogue. */
+  if(provinceEl && cityEl){
+    provinceEl.addEventListener(
+      "change",
+      async ()=>{
+
+        /* Trust marker: this event fires ONLY on a genuine
+           user selection (programmatic value writes do not
+           fire change), so the restored province below is
+           provably user-chosen. */
+        form.dataset.provinceUserSelected = "1";
+
+        const prevCity = cityEl.value || "";
+
+        await fillCityOptions(
+          cityEl,
+          provinceEl.value,
+          prevCity
+        );
+
+        scheduleSignupDraftSave(form);
+
+      }
+    );
+
+    cityEl.addEventListener(
+      "change",
+      () => scheduleSignupDraftSave(form)
+    );
+  }
+
+  /* Shared Location text — draft autosave on change. */
+  if(locationEl){
+    locationEl.addEventListener(
+      "change",
+      () => scheduleSignupDraftSave(form)
+    );
+  }
+
+}
+
+/* Restores static (non-social, non-location) draft fields.
+   Province/City are restored by initSignupLocations AFTER the
+   shared-catalogue options exist, so they are SKIPPED here.
+   The explicit ?account=private|dealer preset — an intentional
+   navigation choice — takes precedence over saved account type. */
 function restoreSignupDraft(saved, presetAccount){
 
   if(!saved){
@@ -173,17 +645,49 @@ function restoreSignupDraft(saved, presetAccount){
   setTextValue("dealership", saved.dealership);
   setTextValue("dealerEmail", saved.dealerEmail);
   setTextValue("dealerPhone", saved.dealerPhone);
-  setTextValue("dealerAddress", saved.dealerAddress);
-  setSelectValue("dealerProvince", saved.dealerProvince);
+
+  /* ONE shared location set for ALL account types. The shared
+     values are saved under the existing draft keys (dealer* and
+     profile* aliases hold the same shared values), so whichever
+     alias exists is restored. */
+  const savedProvince =
+    normalizeProvinceName(
+      saved?.dealerProvince || saved?.profileProvince || ""
+    );
+  const savedCity =
+    (saved?.dealerCity || saved?.profileCity || "").trim();
+  const savedLocation =
+    (saved?.dealerAddress || saved?.profileLocation || "").trim();
+
+  const provinceEl = document.getElementById("locationProvince");
+  const cityEl = document.getElementById("locationCity");
+  const locationEl = document.getElementById("locationText");
+
+  /* Same trust rule as initSignupLocations: restore the
+     province only when the draft proves the user picked it.
+     Legacy auto-inserted values (no marker) are ignored. */
+  if(provinceEl && savedProvince && saved?.provinceUserSelected === "1"){
+    provinceEl.value = savedProvince;
+    /* Re-arm the marker (see initSignupLocations) so the next
+       autosave does not strip trust from a genuine selection. */
+    const signupForm = document.getElementById("signupForm");
+    if(signupForm){
+      signupForm.dataset.provinceUserSelected = "1";
+    }
+  }
+
+  if(cityEl && savedCity){
+    cityEl.value = savedCity;
+  }
+
+  if(locationEl && savedLocation){
+    locationEl.value = savedLocation;
+  }
 
   setTextValue("mobileNumber", saved.mobileNumber);
   setTextValue("whatsappNumber", saved.whatsappNumber);
-  setTextValue("altContactNumber", saved.altContactNumber);
 
   setTextValue("profileBio", saved.profileBio);
-  setTextValue("profileLocation", saved.profileLocation);
-  setTextValue("profileCity", saved.profileCity);
-  setSelectValue("profileProvince", saved.profileProvince);
   setTextValue("profileWebsite", saved.profileWebsite);
 
 }
@@ -252,7 +756,7 @@ function restoreSignupSocialDraft(saved){
 /* Collects ONLY allowlisted non-sensitive fields.
    password / passwordConfirm / avatar File / tokens are
    deliberately never read here and never passed to
-   savePageState(). */
+   saveDraftRecord(). */
 function collectSignupDraft(){
 
   const form = document.getElementById("signupForm");
@@ -281,7 +785,7 @@ function collectSignupDraft(){
   const preset =
     form?.dataset?.signupPresetAccount || "";
 
-  return {
+    return {
     name: read("name"),
     surname: read("surname"),
     email: read("email"),
@@ -292,15 +796,22 @@ function collectSignupDraft(){
     dealership: read("dealership"),
     dealerEmail: read("dealerEmail"),
     dealerPhone: read("dealerPhone"),
-    dealerAddress: read("dealerAddress"),
-    dealerProvince: read("dealerProvince"),
+    dealerAddress: read("locationText"),
+    dealerProvince: read("locationProvince"),
+    dealerCity: read("locationCity"),
+    profileProvince: read("locationProvince"),
+    profileCity: read("locationCity"),
     mobileNumber: read("mobileNumber"),
     whatsappNumber: read("whatsappNumber"),
-    altContactNumber: read("altContactNumber"),
+    /* Province trust marker: set ONLY when the user actually
+       picks a province in the shared select. Drafts saved by
+       the legacy build (which auto-inserted the first catalogue
+       province) carry NO marker, so their stale auto-value is
+       never restored again. */
+    provinceUserSelected:
+      form?.dataset?.provinceUserSelected === "1" ? "1" : "",
     profileBio: read("profileBio"),
-    profileLocation: read("profileLocation"),
-    profileCity: read("profileCity"),
-    profileProvince: read("profileProvince"),
+    profileLocation: read("locationText"),
     profileWebsite: read("profileWebsite"),
     socialLinks
   };
@@ -330,9 +841,13 @@ function scheduleSignupDraftSave(form){
       return;
     }
 
-    savePageState(
-      SIGNUP_DRAFT_KEY,
-      collectSignupDraft()
+    const draft = collectSignupDraft();
+
+    saveDraftRecord(
+      SIGNUP_DRAFT_WORKFLOW,
+      signupUserKey(),
+      draft,
+      { accountType: draft.accountType || "" }
     );
 
   }, 250);
@@ -354,7 +869,11 @@ function clearSignupDraft(form){
     form.dataset.signupComplete = "true";
   }
 
-  clearPageState(SIGNUP_DRAFT_KEY);
+  clearDraftRecord(SIGNUP_DRAFT_WORKFLOW, signupUserKey());
+
+  try{
+    sessionStorage.removeItem(SIGNUP_LEGACY_STORAGE_KEY);
+  }catch(e){}
 
 }
 
@@ -595,6 +1114,72 @@ renderSignupAvatarPreview(null);
 });
 
 renderSignupAvatarPreview(null);
+
+}
+
+/* PHASE 1 - SIGNUP PASSWORD VISIBILITY TOGGLES
+   Wires an eye button to its own password input. Each field
+   starts as type="password" (hidden) and the button flips ONLY
+   that field between password and text, updating its own
+   aria-pressed / aria-label / title so screen readers announce
+   the current action (icon swap is CSS-driven via
+   [aria-pressed="true"]).
+
+   Purely presentational: password values, validation, the
+   shared password policy (js/passwordPolicy.js), signup draft
+   storage and Supabase Auth are untouched. The button is a real
+   <button type="button">, so it can never submit the form. */
+
+function bindSignupPasswordToggle(inputId, toggleId, noun){
+
+  const input =
+  document.getElementById(inputId);
+
+  const toggle =
+  document.getElementById(toggleId);
+
+  if(!input || !toggle){
+    return;
+  }
+
+  if(toggle.dataset.passwordToggleBound){
+    return;
+  }
+
+  toggle.dataset.passwordToggleBound = "true";
+
+  function applyVisibility(visible){
+
+    /* The ONLY thing that ever changes the field type. */
+    input.type =
+    visible ? "text" : "password";
+
+    const pressed =
+    visible ? "true" : "false";
+
+    toggle.setAttribute(
+      "aria-pressed",
+      pressed
+    );
+
+    const label =
+    `${visible ? "Hide" : "Show"} ${noun}`;
+
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
+
+  }
+
+  /* Default state: password hidden. Never auto-revealed. */
+  applyVisibility(false);
+
+  toggle.addEventListener("click", ()=>{
+
+    applyVisibility(
+      input.type === "password"
+    );
+
+  });
 
 }
 
@@ -848,6 +1433,8 @@ mb-1.5
 Password
 </label>
 
+<div class="signup-password-field">
+
 <input
 id="password"
 type="password"
@@ -859,6 +1446,30 @@ input-light
 "
 required
 >
+
+<!-- PHASE 1 - password visibility (eye) button.
+     type="button" so it can never submit the form.
+     Inline SVG only (same icon approach as the rest of
+     the project) - no icon library. The crossed-eye is
+     revealed by [aria-pressed="true"] in css/styles.css. -->
+<button
+type="button"
+id="passwordToggle"
+class="signup-password-toggle"
+aria-label="Show password"
+aria-pressed="false"
+aria-controls="password"
+title="Show password"
+>
+<span class="signup-password-icon-show">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+</span>
+<span class="signup-password-icon-hide">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+</span>
+</button>
+
+</div>
 
 <!-- PHASE 12 — live password requirements
      (shared policy with /reset-password) -->
@@ -883,6 +1494,8 @@ mb-1.5
 Confirm Password
 </label>
 
+<div class="signup-password-field">
+
 <input
 id="passwordConfirm"
 type="password"
@@ -894,6 +1507,29 @@ input-light
 "
 required
 >
+
+<!-- PHASE 1 - confirm password visibility (eye) button.
+     Independent from the Password field above: each button
+     toggles only its OWN input. type="button" so it can
+     never submit the form. -->
+<button
+type="button"
+id="passwordConfirmToggle"
+class="signup-password-toggle"
+aria-label="Show confirm password"
+aria-pressed="false"
+aria-controls="passwordConfirm"
+title="Show confirm password"
+>
+<span class="signup-password-icon-show">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+</span>
+<span class="signup-password-icon-hide">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+</span>
+</button>
+
+</div>
 
 </div>
 
@@ -950,42 +1586,6 @@ type="tel"
 placeholder="Dealership Phone Number (optional)"
 class="input-light"
 >
-
-<input
-id="dealerAddress"
-placeholder="Dealership Address (optional)"
-class="input-light"
->
-
-<label
-for="dealerProvince"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-Province
-</label>
-<select
-id="dealerProvince"
-class="input-light"
->
-<option value="">Select a province…</option>
-<option value="Gauteng">Gauteng</option>
-<option value="Western Cape">Western Cape</option>
-<option value="KwaZulu-Natal">KwaZulu-Natal</option>
-<option value="Eastern Cape">Eastern Cape</option>
-<option value="Free State">Free State</option>
-<option value="Limpopo">Limpopo</option>
-<option value="Mpumalanga">Mpumalanga</option>
-<option value="North West">North West</option>
-<option value="Northern Cape">Northern Cape</option>
-</select>
 
 </div>
 
@@ -1159,39 +1759,6 @@ class="input-light"
 </div>
 
 <div>
-
-<label
-for="altContactNumber"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-Alternative Contact Number
-<span class="
-normal-case
-font-semibold
-text-[#94A3B8]
-tracking-normal
-"
->
-&nbsp;· optional
-</span>
-</label>
-
-<input
-id="altContactNumber"
-type="tel"
-autocomplete="tel"
-inputmode="tel"
-placeholder="+27 00 000 0000"
-class="input-light"
->
 
 </div>
 
@@ -1424,181 +1991,155 @@ class="input-light resize-y"
 
 </div>
 
-<!-- LOCATION / CITY -->
 
-<div class="
-grid
-grid-cols-1
-md:grid-cols-2
-gap-5
-">
 
-<div>
+<!-- LOCATION / PROVINCE / CITY / WEBSITE -->
 
-<label
-for="profileLocation"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-Location
-<span class="
-normal-case
-font-semibold
-text-[#94A3B8]
-tracking-normal
-"
->
-&nbsp;· optional
-</span>
-</label>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 
-<input
-id="profileLocation"
-type="text"
-autocomplete="street-address"
-placeholder="e.g. 12 Main Road, Randburg"
-class="input-light"
->
+  <div>
 
-</div>
+    <label
+      for="locationProvince"
+      class="
+        block
+        text-[12px]
+        font-bold
+        uppercase
+        tracking-[0.08em]
+        text-[#0A192F]
+        mb-1.5
+      "
+    >
+      Province
+      <span class="
+        normal-case
+        font-semibold
+        text-[#94A3B8]
+        tracking-normal
+      ">
+        &nbsp;· optional
+      </span>
+    </label>
 
-<div>
+    <select
+      id="locationProvince"
+      class="input-light"
+    >
+      <option value="">
+        Select Province
+      </option>
+    </select>
 
-<label
-for="profileCity"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-City
-<span class="
-normal-case
-font-semibold
-text-[#94A3B8]
-tracking-normal
-"
->
-&nbsp;· optional
-</span>
-</label>
+  </div>
 
-<input
-id="profileCity"
-type="text"
-autocomplete="address-level2"
-placeholder="e.g. Johannesburg"
-class="input-light"
->
+  <div>
 
-</div>
+    <label
+      for="locationCity"
+      class="
+        block
+        text-[12px]
+        font-bold
+        uppercase
+        tracking-[0.08em]
+        text-[#0A192F]
+        mb-1.5
+      "
+    >
+      City
+      <span class="
+        normal-case
+        font-semibold
+        text-[#94A3B8]
+        tracking-normal
+      ">
+        &nbsp;· optional
+      </span>
+    </label>
 
-</div>
+    <select
+      id="locationCity"
+      class="input-light"
+      disabled
+    >
+      <option value="">
+        Select Province First
+      </option>
+    </select>
 
-<!-- PROVINCE / WEBSITE -->
-
-<div class="
-grid
-grid-cols-1
-md:grid-cols-2
-gap-5
-">
-
-<div>
-
-<label
-for="profileProvince"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-Province
-<span class="
-normal-case
-font-semibold
-text-[#94A3B8]
-tracking-normal
-"
->
-&nbsp;· optional
-</span>
-</label>
-
-<select
-id="profileProvince"
-class="input-light"
->
-
-<option value="">Select a province…</option>
-
-<option value="Eastern Cape">Eastern Cape</option>
-<option value="Free State">Free State</option>
-<option value="Gauteng">Gauteng</option>
-<option value="KwaZulu-Natal">KwaZulu-Natal</option>
-<option value="Limpopo">Limpopo</option>
-<option value="Mpumalanga">Mpumalanga</option>
-<option value="North West">North West</option>
-<option value="Northern Cape">Northern Cape</option>
-<option value="Western Cape">Western Cape</option>
-
-</select>
+  </div>
 
 </div>
 
 <div>
 
-<label
-for="profileWebsite"
-class="
-block
-text-[12px]
-font-bold
-uppercase
-tracking-[0.08em]
-text-[#0A192F]
-mb-1.5
-"
->
-Website
-<span class="
-normal-case
-font-semibold
-text-[#94A3B8]
-tracking-normal
-"
->
-&nbsp;· optional
-</span>
-</label>
+  <label
+    for="locationText"
+    class="
+      block
+      text-[12px]
+      font-bold
+      uppercase
+      tracking-[0.08em]
+      text-[#0A192F]
+      mb-1.5
+    "
+  >
+    Location
+    <span class="
+      normal-case
+      font-semibold
+      text-[#94A3B8]
+      tracking-normal
+    ">
+      &nbsp;· optional
+    </span>
+  </label>
 
-<input
-id="profileWebsite"
-type="url"
-inputmode="url"
-autocomplete="url"
-placeholder="https://www.example.co.za"
-class="input-light"
->
+  <input
+    id="locationText"
+    type="text"
+    autocomplete="street-address"
+    placeholder="Street, suburb, city, province"
+    class="input-light"
+  >
 
 </div>
+
+<div>
+
+  <label
+    for="profileWebsite"
+    class="
+      block
+      text-[12px]
+      font-bold
+      uppercase
+      tracking-[0.08em]
+      text-[#0A192F]
+      mb-1.5
+    "
+  >
+    Website
+    <span class="
+      normal-case
+      font-semibold
+      text-[#94A3B8]
+      tracking-normal
+    ">
+      &nbsp;· optional
+    </span>
+  </label>
+
+  <input
+    id="profileWebsite"
+    type="url"
+    inputmode="url"
+    autocomplete="url"
+    placeholder="https://www.example.co.za"
+    class="input-light"
+  >
 
 </div>
 
@@ -1964,6 +2505,20 @@ bindPasswordRequirements(
   )
 );
 
+/* PHASE 1 - password visibility (eye) buttons.
+   Each field is toggled independently; both start hidden. */
+bindSignupPasswordToggle(
+  "password",
+  "passwordToggle",
+  "password"
+);
+
+bindSignupPasswordToggle(
+  "passwordConfirm",
+  "passwordConfirmToggle",
+  "confirm password"
+);
+
 const accountType =
 document.getElementById("accountType");
 
@@ -2030,6 +2585,18 @@ accountType.addEventListener(
 "change",
 updatePlans
 );
+
+/* PHASE 2 — Province → City cascading (shared catalogue).
+   SAME pattern as Upload Vehicle fillProvinces/fillCities:
+   province options come from getProvinces(); the city select
+   for that province comes from getCities(province). Changing
+   province clears an invalid previous city. Listeners are
+   bound ONCE here (initSignup runs once per mount via
+   form.dataset.bound). */
+initSignupLocations(signupDraft);
+
+
+
 
 /* =========================================
 PHASE 3 — DEALERSHIP SOCIAL MEDIA CHIPS
@@ -2164,9 +2731,20 @@ restoreSignupSocialDraft(signupDraft);
    overwrite the user's choice with a stale saved value. */
 form.dataset.signupPresetAccount = presetAccount || "";
 
-form.addEventListener(
-"input",
-(e)=>{
+/* PHASE 3 (FULL-PAGE DRAFT PERSISTENCE) — the Contact Info
+   (#mobileNumber/#whatsappNumber), Profile (#profileBio/
+   #locationText/#profileWebsite) and social cards are rendered
+   OUTSIDE the <form> element, so input events in them never bubble to
+   the form listeners above and those fields were lost on refresh even
+   though collect/restore already support them. The SAME delegated
+   listeners are therefore also attached to the signup content
+   container that wraps every card (one mechanism, same draftStore
+   foundation, same password exclusion — no second draft system). */
+
+const signupDraftScope =
+  document.getElementById("signupContent") || form;
+
+const onSignupDraftInput = (e) => {
 
 if(!e.target || e.target === form){
 return;
@@ -2184,12 +2762,9 @@ return;
 
 scheduleSignupDraftSave(form);
 
-}
-);
+};
 
-form.addEventListener(
-"change",
-(e)=>{
+const onSignupDraftChange = (e) => {
 
 if(!e.target || e.target === form){
 return;
@@ -2204,8 +2779,28 @@ return;
 
 scheduleSignupDraftSave(form);
 
-}
+};
+
+form.addEventListener("input", onSignupDraftInput);
+
+form.addEventListener(
+"change",
+onSignupDraftChange
 );
+
+if(signupDraftScope !== form){
+
+signupDraftScope.addEventListener(
+"input",
+onSignupDraftInput
+);
+
+signupDraftScope.addEventListener(
+"change",
+onSignupDraftChange
+);
+
+}
 
 const socialInputsBox =
 document.getElementById("signupSocialInputs");
@@ -2229,9 +2824,21 @@ if(signupDraft){
 scheduleSignupDraftSave(form);
 }
 
+/* Keep a synchronous lock as well as disabling the button. The
+   submit event can be dispatched again before the browser paints
+   the disabled state (or by another submit control), so the button
+   state alone is not a submission guard. */
+let signupSubmitting = false;
+
 form.addEventListener("submit", async (e)=>{
 
 e.preventDefault();
+
+if(signupSubmitting){
+return;
+}
+
+signupSubmitting = true;
 
 const btn =
 document.getElementById("signupBtn");
@@ -2282,23 +2889,38 @@ const dealerPhone =
 document.getElementById("dealerPhone")
 ?.value?.trim() || "";
 
-const dealerAddress =
-document.getElementById("dealerAddress")
+/* ONE shared location control set for ALL account types
+   (#locationText / #locationProvince / #locationCity).
+   Dealership accounts map the shared Location to the
+   existing dealership_address payload; private sellers map
+   the SAME shared Location to the existing location payload. */
+
+const sharedLocation =
+document.getElementById("locationText")
 ?.value?.trim() || "";
 
-const dealerProvinceRaw =
-document.getElementById("dealerProvince")
+/* Existing dealership address payload name — fed by the
+   shared Location field. */
+const dealership_address = sharedLocation;
+
+const sharedProvinceRaw =
+document.getElementById("locationProvince")
 ?.value?.trim() || "";
 
-/* PHASE 2 FIX — single canonical province. */
-const profileProvinceRaw =
-document.getElementById("profileProvince")
-?.value || "";
+/* Shared city comes from the SAME catalogue cascade
+   (#locationProvince → #locationCity). Only a city valid
+   for the selected province is kept. */
+const sharedCityRaw =
+document.getElementById("locationCity")
+?.value?.trim() || "";
 
+/* ONE validated canonical province value, ONE city value —
+   read from the shared controls for BOTH account types.
+   Invalid/blank stays null. Never bypasses DB protection. */
 const province =
-account_type === "dealer"
-? normalizeProvinceName(dealerProvinceRaw)
-: normalizeProvinceName(profileProvinceRaw);
+normalizeProvinceName(sharedProvinceRaw);
+
+const city = sharedCityRaw;
 
 const socialLinks = {};
 
@@ -2487,9 +3109,13 @@ emailRedirectTo: appUrl("/dashboard"),
 data:{
 
 /* PHASE 4 — canonical name key. readMeta() prefers first_name, then
-   name. Signup now sends BOTH so INSERT and backfill populate
-   profiles.first_name even when the server echoes a subset of keys.
-   Surname already matches (surname). */
+   name, so BOTH are sent and no key ordering can lose the given name.
+   PHASE 2 (NEW-DEALERSHIP CONTINUITY) — public.profiles has NO
+   first_name column (verified against the live schema); profiles.name
+   is the stored column and api.js buildAuthoritativeProfileInsert()
+   maps first_name || name into it. first_name therefore stays in auth
+   user_metadata only (schemaless) and is never written to a
+   non-existent column. Surname already matches (surname). */
 first_name: name,
 name,
 surname,
@@ -2527,7 +3153,7 @@ account_type === "dealer"
 dealership_address:
 
 account_type === "dealer"
-? dealerAddress || null
+? dealership_address ?? null
 : null,
 
 social_links:
@@ -2548,30 +3174,33 @@ document.getElementById("mobileNumber")?.value.trim() || null,
 whatsapp_number:
 document.getElementById("whatsappNumber")?.value.trim() || null,
 
-alternative_contact:
-document.getElementById("altContactNumber")?.value.trim() || null,
-
 /* PHASE 7 — optional profile information for ALL
-   account types. Read from the new Profile card;
+   account types. Read from the Profile card;
    blank fields are stored as null. These travel
    through the EXISTING metadata → profiles path
-   (api.js getUserProfile fallback). */
+   (api.js getUserProfile fallback).
+
+   The shared Location field (#locationText) feeds the
+   existing `location` payload for EVERY account type,
+   and the existing `dealership_address` payload for
+   dealerships (see above). */
 
 bio:
 document.getElementById("profileBio")?.value.trim() || null,
 
 location:
-document.getElementById("profileLocation")?.value.trim() || null,
+sharedLocation || null,
 
 city:
-document.getElementById("profileCity")?.value.trim() || null,
+city || null,
 
 province:
 
-    /* PHASE 2 FIX — ONE validated canonical province value.
-       Dealer accounts use #dealerProvince, private accounts use
-       #profileProvince (normalized above). Invalid/blank stays
-       null. Never two columns; never bypasses DB protection. */
+    /* PHASE 2 FIX — ONE validated canonical province value,
+       read from the ONE shared Province control
+       (#locationProvince) for BOTH account types.
+       Invalid/blank stays null. Never two columns; never
+       bypasses DB protection. */
     province || null,
 
 website:
@@ -2605,12 +3234,20 @@ if(!user){
 /* PHASE 2 FIX — no user object means signup did NOT
    succeed: keep the saved NON-SENSITIVE draft so the
    user can correct the problem without starting over.
-   savePageState() here only writes the allowlisted
-   fields from collectSignupDraft() — passwords are
-   never included. */
-savePageState(
-SIGNUP_DRAFT_KEY,
-collectSignupDraft()
+   The draft save uses the EXISTING draftStore foundation
+   (the same saveDraftRecord call scheduleSignupDraftSave
+   uses) and collectSignupDraft() only reads the
+   allowlisted NON-SENSITIVE fields — passwords, password
+   confirmation, the avatar File and tokens are never
+   included. */
+
+const draft = collectSignupDraft();
+
+saveDraftRecord(
+  SIGNUP_DRAFT_WORKFLOW,
+  signupUserKey(),
+  draft,
+  { accountType: draft.accountType || "" }
 );
 
 toast("Account created. Check your email.");
@@ -2718,18 +3355,27 @@ error:profileError
 .insert(...);
 */
 
-/* SUCCESS — PHASE 2: present a clean same-route confirmation state.
-   Replaces the WHOLE signup content region (#signupContent) instead of
-   only #signupForm.innerHTML, so no header, form fields, dealer/launch
-   controls, orphan Create Account button or terms remain visible or
-   focusable underneath. Same emerald panel + HUFA language, no redesign.
-   No routing, no URL change, no auth/data-mapping change. */
+/* SUCCESS — PHASE 3: present a clean same-route confirmation state.
+   Replaces the WHOLE signup content region (#signupContent) — the
+   wrapper that contains the header, Account Information, Contact
+   Information, Profile, Social Profiles, Launch Promotion, the
+   Create Account button and the terms text — so NO signup control
+   can remain visible or focusable underneath the confirmation.
+   There is deliberately NO form-scoped fallback: swapping only the
+   form's contents is what leaves orphaned cards and an orphan
+   Create Account button around the panel. Fallbacks replace the
+   next-widest signup region (.signup-page, then #app) so every
+   path ends in the same confirmation-only state. Same emerald
+   panel + HUFA language, no redesign. No routing, no URL change,
+   no auth/data-mapping change. */
 clearSignupDraft(form);
 
-const signupContent =
-document.getElementById("signupContent");
-
 const successHtml = `
+
+<div class="
+max-w-2xl
+mx-auto
+">
 
 <div class="
 rounded-[28px]
@@ -2764,26 +3410,56 @@ Please verify your email before logging in.
 
 </div>
 
+</div>
+
 `;
 
-if(signupContent){
+/* Whole-region replacement only. #signupContent is the existing
+   wrapper intended to contain the complete Signup content; the
+   two fallbacks exist only so the confirmation can never render
+   inside a surviving form. */
+const signupRegion =
+document.getElementById("signupContent") ||
+document.querySelector(".signup-page") ||
+document.getElementById("app");
 
-signupContent.innerHTML = successHtml;
+if(signupRegion){
 
-}else{
-
-document.getElementById("signupForm").innerHTML = successHtml;
+signupRegion.innerHTML = successHtml;
 
 }
 
-/* Position the fresh confirmation state at the top and move keyboard
-   focus to its heading. Runs synchronously after the success DOM exists
-   (same scroll pattern as navigate()), so the welcome overlay lifts to
-   reveal the panel at the top on every viewport. */
+/* Position the fresh confirmation state at the top with a SINGLE
+   JUMP — never a smooth animation. css/styles.css sets a global
+   "* { scroll-behavior: smooth }", and scrollTo's behavior:"auto"
+   defers to that CSS, which animates from the previous position
+   and can be cancelled by any wheel/touch input, leaving the page
+   mid-scroll. behavior:"instant" overrides the CSS and jumps in
+   every modern engine; engines without that enum value fall back
+   to an inline scroll-behavior override, which also makes the
+   two-argument scrollTo a single jump. Runs synchronously after
+   the success DOM exists, so the welcome overlay lifts to reveal
+   the panel at the top on every viewport. */
+
+try{
+
 window.scrollTo({
 top: 0,
-behavior: "auto"
+left: 0,
+behavior: "instant"
 });
+
+}catch(scrollErr){
+
+const html = document.documentElement;
+
+html.style.scrollBehavior = "auto";
+
+window.scrollTo(0, 0);
+
+html.style.removeProperty("scroll-behavior");
+
+}
 
 const successHeading =
 document.getElementById("signupSuccessHeading");
@@ -2818,6 +3494,8 @@ resetBtn();
 }
 
 function resetBtn(){
+
+signupSubmitting = false;
 
 btn.disabled = false;
 

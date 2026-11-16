@@ -247,7 +247,7 @@ let authRefreshRunning = false;
 
 window.addEventListener(
 "authChanged",
-()=>{
+ (authEvent)=>{
 
 if(authRefreshRunning){
 return;
@@ -268,7 +268,20 @@ nav.innerHTML = Navbar();
    visibility (mobile Dashboard / Login / Logout). */
 await refreshNavAuth();
 
-await renderApp();
+const currentPath = stripBase(window.location.pathname).replace(/\/+$/, "") || "/";
+const authEventType = authEvent?.detail?.event;
+const keepUploadVehicleMounted =
+  currentPath === "/upload-vehicle" &&
+  authEvent?.detail?.authenticated === true &&
+  ["INITIAL_SESSION", "TOKEN_REFRESHED", "USER_UPDATED"].includes(authEventType);
+
+/* Session maintenance events only need to refresh the navbar. Re-running
+the protected route remounts Upload Vehicle, discards its tab-local
+catalogue UI and shows the boot overlay even though the session remains
+valid. Terminal/sign-in/recovery events still go through the router. */
+if(!keepUploadVehicleMounted){
+  await renderApp();
+}
 
 }finally{
 

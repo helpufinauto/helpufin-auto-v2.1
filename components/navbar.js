@@ -11,6 +11,47 @@ import {
 
 import { showAuthLoading, hideAuthLoading } from "./authLoading.js";
 
+import { purgeUserDrafts } from "../js/draftStore.js";
+
+/* PHASE 4 — user-scoped IndexedDB purge for the Upload
+Vehicle image draft on sign-out (narrow cleanup only; the
+record key IS the user id, so other users and other data
+are never touched). */
+import { clearUploadVehicleImageDraft } from "../js/uploadVehicleImageStore.js";
+
+/* PHASE 6B — user-scoped IndexedDB purge for the Trade-In
+image draft on sign-out (narrow cleanup only; the record
+key IS the user id, so other users and other data are never
+touched). */
+import { clearTradeInImageDraft } from "../js/tradeInImageStore.js";
+
+/* PHASE 1 — capture the signing-out user's id BEFORE the
+session is destroyed, then surgically purge ONLY that
+user's hufa:draft:* keys. No other storage is touched. */
+async function purgeSigningOutUserDrafts(){
+
+  try{
+
+    const { data } = await supabase.auth.getUser();
+
+    const id = data?.user?.id;
+
+    if(typeof id === "string" && id){
+      purgeUserDrafts(id);
+      /* PHASE 4 — also purge this user's IndexedDB Upload
+      Vehicle image draft BEFORE the session is destroyed,
+      while the id is still known. */
+      await clearUploadVehicleImageDraft(id);
+      /* PHASE 6B — also purge this user's IndexedDB
+      Trade-In image draft BEFORE the session is destroyed,
+      while the id is still known. */
+      await clearTradeInImageDraft(id);
+    }
+
+  }catch(e){}
+
+}
+
 let notifications = [];
 let unread = 0;
 
@@ -1452,6 +1493,9 @@ showAuthLoading("Signing you out...");
 
 try{
 
+  await purgeSigningOutUserDrafts();
+
+
 await supabase.auth.signOut();
 
 clearAuthCache();
@@ -1517,6 +1561,9 @@ try{
 /* =====================================
 SIGN OUT
 ===================================== */
+
+  await purgeSigningOutUserDrafts();
+
 
 await supabase.auth.signOut();
 

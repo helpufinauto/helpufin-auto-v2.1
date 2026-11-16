@@ -15,6 +15,9 @@ import {
 PHASE2_SOCIAL_PLATFORMS,
 normalizeEditSocialValue
 } from "../js/socialProfile.js";
+import { saveDraft, loadDraft, clearDraft } from "../js/draftStore.js";
+
+
 
 /* ============================================================
    PHASE 3 — DEALER DASHBOARD: EDIT DEALERSHIP PAGE
@@ -59,6 +62,169 @@ let logoRemoveRequested = false;
 let saving = false;
 
 const MAX_LOGO_BYTES = 5 * 1024 * 1024; // 5 MB
+
+/* =========================================
+PHASE 6D — DEALERSHIP DETAILS DRAFT PERSISTENCE
+--------------------------------------------------------------------
+Reuses the existing user-scoped draftStore with workflow
+hufa:draft:dealershipDetails:<userId>. Persists only the
+normal text fields that already exist in the Dealership
+Details form so a refresh or close/re-open does not lose
+typed work.
+
+Stored fields (exact match to the form's real inputs):
+  - ddeName
+  - ddeEmail
+  - ddePhone
+  - ddeAddress
+  - ddeProvince
+
+NOT stored (per spec):
+  - dealership logo File/Blob (pendingLogoFile,
+    logoRemoveRequested are intentionally left as
+    in-memory only)
+  - authentication data / tokens / MFA
+
+Lifecycle:
+  - restore when Dealership Details opens (after prefill)
+  - debounced autosave on input
+  - retain on close
+  - retain on refresh/navigation
+  - clear only after successful save
+  - failed save retains draft
+  - no duplicate listeners (guarded by a flag)
+
+CRITICAL: This draft persistence does NOT modify or bypass:
+  - dealership province lock (province field disabled
+    when already set, admin-only changes)
+  - admin-only province changes
+  - admin RPC
+  - existing save rules
+  - RLS
+========================================= */
+
+const DEALERSHIP_DETAILS_DRAFT_WORKFLOW = "dealershipDetails";
+
+const DEALERSHIP_DETAILS_DRAFT_FIELD_IDS = [
+  "ddeName",
+  "ddeEmail",
+  "ddePhone",
+  "ddeAddress",
+  "ddeProvince"
+];
+
+let dealershipDetailsDraftListenerAttached = false;
+let dealershipDetailsDraftSaveTimer = null;
+let dealershipDetailsDraftSaveScheduled = false;
+
+function dealershipDetailsDraftLooksValid(payload){
+  /* loadDraft returns the stored data object directly (not the
+     full record), so validate the payload against the allowlist. */
+  if(!payload || typeof payload !== "object" ||
+     Array.isArray(payload))
+    return false;
+  for(const key of Object.keys(payload)){
+    if(!DEALERSHIP_DETAILS_DRAFT_FIELD_IDS.includes(key))
+      return false;
+  }
+  for(const id of DEALERSHIP_DETAILS_DRAFT_FIELD_IDS){
+    const v = payload[id];
+    if(v !== undefined && v !== null && typeof v !== "string")
+      return false;
+  }
+  return true;
+}
+
+function readDealershipDetailsDraftData(){
+  const data = {};
+  for(const id of DEALERSHIP_DETAILS_DRAFT_FIELD_IDS){
+    const el = document.getElementById(id);
+    data[id] = el ? String(el.value || "").trim() : "";
+  }
+  return data;
+}
+
+function applyDealershipDetailsDraftToForm(data){
+  if(!data || typeof data !== "object") return;
+  for(const id of DEALERSHIP_DETAILS_DRAFT_FIELD_IDS){
+    const el = document.getElementById(id);
+    if(!el || data[id] === undefined || data[id] === null) continue;
+    /* Province lock: a disabled province select must never be
+       overwritten by a draft — the lock stays authoritative. */
+    if(id === "ddeProvince" && el.disabled) continue;
+    el.value = data[id];
+  }
+}
+
+async function scheduleDealershipDetailsDraftSave(){
+  if(dealershipDetailsDraftSaveScheduled) return;
+  dealershipDetailsDraftSaveScheduled = true;
+  if(dealershipDetailsDraftSaveTimer) clearTimeout(dealershipDetailsDraftSaveTimer);
+  dealershipDetailsDraftSaveTimer = setTimeout(async ()=>{
+    dealershipDetailsDraftSaveTimer = null;
+    dealershipDetailsDraftSaveScheduled = false;
+    try{
+      const data = readDealershipDetailsDraftData();
+      const user = await getAuthUser();
+      if(!user || !user.id) return;
+      await saveDraft(
+        DEALERSHIP_DETAILS_DRAFT_WORKFLOW,
+        user.id,
+        data
+      );
+    }catch(_){
+      /* draftStore unavailable — silently skip */
+    }
+  }, 400);
+}
+
+async function restoreDealershipDetailsDraft(){
+  try{
+    const user = await getAuthUser();
+    if(!user || !user.id) return;
+    /* loadDraft resolves to the stored data object directly. */
+    const payload = await loadDraft(
+      DEALERSHIP_DETAILS_DRAFT_WORKFLOW,
+      user.id
+    );
+    if(dealershipDetailsDraftLooksValid(payload)){
+      applyDealershipDetailsDraftToForm(payload);
+    }
+  }catch(_){
+    /* draftStore unavailable - fall back to existing prefill */
+  }
+}
+
+async function clearDealershipDetailsDraftAfterSave(){
+  try{
+    const user = await getAuthUser();
+    if(user && user.id){
+      await clearDraft(DEALERSHIP_DETAILS_DRAFT_WORKFLOW, user.id);
+    }
+  }catch(_){
+    /* best-effort clear */
+  }
+}
+
+function attachDealershipDetailsDraftListeners(){
+  if(dealershipDetailsDraftListenerAttached) return;
+  dealershipDetailsDraftListenerAttached = true;
+
+  const inputIds = DEALERSHIP_DETAILS_DRAFT_FIELD_IDS.filter((id)=>{
+    return document.getElementById(id) !== null;
+  });
+
+  for(const id of inputIds){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.removeEventListener("input", onDealershipDetailsDraftInput);
+    el.addEventListener("input", onDealershipDetailsDraftInput);
+  }
+}
+
+function onDealershipDetailsDraftInput(){
+  scheduleDealershipDetailsDraftSave();
+}
 
 /* ============================================================
    PAGE ENTRY — renders through the shared dashboard shell
@@ -126,6 +292,15 @@ document.getElementById("ddeBox");
 if (box) {
 box.innerHTML = renderForm(profile);
 }
+
+/* PHASE 6D — restore any persisted dealership details
+   draft text fields after the form DOM is in place so
+   the restore can find the real inputs. Runs after
+   prefill so the authoritative profile values take
+   precedence when there is no draft; when a draft exists
+   it overwrites what the user last typed. */
+await restoreDealershipDetailsDraft();
+attachDealershipDetailsDraftListeners();
 
 }
 
@@ -953,6 +1128,12 @@ box.innerHTML = renderForm(currentProfile);
 }
 
 toast("Dealership page updated");
+
+/* PHASE 6D — clear the persisted draft only after a
+successful save. Failed saves fall through to the catch
+block and retain the draft so the user does not lose
+typed work. */
+await clearDealershipDetailsDraftAfterSave();
 
 } catch (err) {
 

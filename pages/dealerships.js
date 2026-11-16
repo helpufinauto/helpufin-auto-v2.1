@@ -24,14 +24,11 @@ import { navigate } from "../js/router.js";
 
 const PER_PAGE = 12;
 
-/* Only actual public columns of public.profiles. The province
-   column does NOT exist yet — it will be added by a separate
-   database migration (public.profiles.province TEXT). It is
-   included in this SELECT so the public directory location
-   filter can match against the dedicated province value once
-   the migration is applied. The api.js profile-creation
-   fallback and the Edit Dealership page already write to
-   profiles.province. */
+/* Only actual public columns of public.profiles (verified against the
+   live schema). profiles.province IS present and is written at signup
+   (signup metadata → api.js profile insert) and by the Edit Dealership
+   page, so the location filter matches the dedicated province value.
+   The directory NEVER parses a province out of dealership_address. */
 const DEALER_COLUMNS =
 "id, dealership_name, dealership_logo, avatar_url, name, surname, account_type, verified_dealer, dealership_address, province, email, dealership_email, phone, dealer_rating, dealer_review_count, package_tier";
 
@@ -433,11 +430,10 @@ return false;
 
 /* LOCATION — match the selected province against the
    dedicated profiles.province field ONLY (exact,
-   case-insensitive match). The province column does not
-   exist yet and will be added by a separate migration;
-   until then d.province is undefined and no dealership
-   matches a specific province (All Provinces still works).
-   We deliberately DO NOT parse province from
+   case-insensitive match). profiles.province exists in the
+   live schema and is populated at signup and from the Edit
+   Dealership page, exactly like the working dealership
+   rows. We deliberately DO NOT parse province from
    dealership_address — filtering uses the dedicated
    province value only. */
 if(locationFilter){
@@ -925,11 +921,25 @@ grid.innerHTML = Array.from(
 
 function locationLine(d) {
 
+/* PHASE 3 — location line now shows BOTH available location
+   values: the real dealership_address and the dedicated
+   profiles.province column (a verified live column, already
+   selected by this page's DEALER_COLUMNS query and used for
+   the province filter). Nothing is parsed or inferred from
+   the address string. City is NOT shown: profiles has NO city
+   column and no retrievable city source exists — a database/
+   storage decision is required (see Phase 3 report). */
 const address =
 (d.address || "").trim();
 
-if(address){
-return address;
+const province =
+(d.province || "").trim();
+
+const parts =
+[address, province].filter(Boolean);
+
+if(parts.length){
+return parts.join(", ");
 }
 
 return "South Africa";

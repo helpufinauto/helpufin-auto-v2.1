@@ -1,4 +1,4 @@
-﻿import { MAKES, MODELS, KEYWORDS } from "../js/searchData.js";
+import { MAKES, MODELS, KEYWORDS } from "../js/searchData.js";
 import { navigate } from "../js/router.js";
 import { supabase } from "../js/api.js";
 import { parseIntent } from "../js/aiEngine.js";
@@ -7,10 +7,13 @@ import { mapToBrowseFilters, searchVehicles } from "../js/searchAdapter.js";
 import { setParams } from "../js/urlState.js";
 import { parseSearchIntent, getSmartSuggestions } from "../js/searchIntent.js";
 import { renderVehicleCard, renderVehicleCardSkeletons } from "./vehicleCard.js";
+import { getCardDetailLevel } from "../js/cardDetailPreference.js";
 import {
   getMakes, getModels, getBodyTypes, getFuelTypes, getTransmissionTypes,
   getDriveTypes, getColours, getConditions, getSellerTypes, getProvinces,
   getBatteryCapacities, getBatteryRanges, getChargingTimes,
+  getVehicleMakeCounts,
+  getVehicleBodyCounts,
   getEngineCapacities, getCommercialCategories, initializeCatalog
 } from "../js/catalog.js";
 
@@ -25,7 +28,7 @@ let isMouseOver = false;
 let searchTokens = [];
 let vehicleCountCache = {};
 
-/* PHASE 3B — homepage Preview Results presentation mode.
+/* PHASE 3B ? homepage Preview Results presentation mode.
    "list" = single-column stack of the existing cards (default).
    "grid" = responsive multi-column grid of the same cards.
    This is pure presentation state; it never affects the search
@@ -87,13 +90,13 @@ const BOOLEAN_FLAGS = [
 /* ==========================
 PHASE 20: HOMEPAGE FILTER CAPSULES
 Labels are fixed; values come from the shared catalog
-(js/catalog.js) — nothing vehicle-related is hard-coded here.
+(js/catalog.js) ? nothing vehicle-related is hard-coded here.
 ========================== */
 
 const CAPSULE_DEFS = [
-  { type: "make", label: "Make" },
+  { type: "make", label: "All Makes" },
   { type: "model", label: "Model" },
-  { type: "body", label: "Body Type" },
+  { type: "body", label: "All Body Types" },
   { type: "fuel", label: "Fuel" },
   { type: "trans", label: "Transmission" },
   { type: "owners", label: "Ownership" },
@@ -125,7 +128,7 @@ function renderTokens() {
   refreshCapsules();
   /* PROMINENT CLEAR FILTERS: shown beside the chips whenever any
      filter/smart token is active, hidden when the state is default.
-     Same existing clearAll() — no duplicated clearing logic. */
+     Same existing clearAll() ? no duplicated clearing logic. */
   const chipsClearBtn = document.getElementById("chipsClearBtn");
   if(chipsClearBtn) chipsClearBtn.classList.toggle("hidden", !searchTokens.length);
   const container = document.getElementById("tokenContainer");
@@ -155,7 +158,7 @@ window.removeSearchToken = function(index) {
 
 /* PHASE 4.6: expose the EXISTING serializer so the preview footer link
    and the new "View All" toolbar button both go through this one
-   function — a single source of truth for token → Browse URL params. */
+   function ? a single source of truth for token ? Browse URL params. */
 window.navigateToBrowseWithTokens = navigateToBrowseWithTokens;
 
 function buildBrowseUrlFromTokens() {
@@ -201,7 +204,7 @@ export function SearchBar(){
       <!-- PROMINENT CLEAR FILTERS: sits directly beside the active
            chips/tokens so it is obvious whenever filters are active.
            Reuses the EXISTING clearAll() reset logic (single source
-           of truth — no second reset implementation). -->
+           of truth ? no second reset implementation). -->
       <button id="chipsClearBtn" type="button" class="hidden shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-red-500 bg-red-50 border border-red-200 hover:bg-red-100 rounded-full px-2.5 py-1 transition">
         <span class="leading-none">&times;</span> Clear Filters
       </button>
@@ -275,7 +278,7 @@ export function SearchBar(){
     <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
       <div class="flex items-center gap-2.5 min-w-0 flex-wrap">
         <div class="text-[12px] font-semibold text-slate-400" id="previewHeading">Preview Results</div>
-        <!-- PHASE 3B LIST / GRID VIEW SWITCHER — presentation only,
+        <!-- PHASE 3B LIST / GRID VIEW SWITCHER ? presentation only,
              does NOT touch search, filters or result data. -->
         <div id="previewViewToggle" class="preview-view-toggle" role="group" aria-label="Results view">
           <button type="button" data-view="list" class="preview-view-btn preview-view-active" aria-pressed="true">
@@ -294,7 +297,7 @@ export function SearchBar(){
              active token state, reusing the EXISTING navigateToBrowseWithTokens()
              URL serializer (identical parameter format to the homepage
              Search Vehicles flow and the existing preview footer link).
-             Pure navigation — no new filtering logic. -->
+             Pure navigation ? no new filtering logic. -->
         <button id="previewViewAllBtn" type="button" class="hidden shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#E48A2F] bg-[#E48A2F]/10 border border-[#E48A2F]/25 hover:bg-[#E48A2F]/20 rounded-full px-2.5 py-1 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E48A2F]/50">
           View All <span aria-hidden="true">&rarr;</span>
         </button>
@@ -317,8 +320,75 @@ export function SearchBar(){
 INIT
 ========================== */
 
+function injectMakeSelectorStyles(){
+  if(document.getElementById("hfcMakeStyles")) return;
+  const style = document.createElement("style");
+  style.id = "hfcMakeStyles";
+  style.textContent = `
+.hfc-dd { min-width: 320px; max-width: 420px; }
+.hfc-make-wrap { display:flex; flex-direction:column; gap:8px; padding:10px; }
+.hfc-make-search { width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px; }
+.hfc-make-search:focus-visible { outline: 2px solid #0A58FF; outline-offset: 2px; border-color: #0A58FF; }
+.hfc-make-list { max-height: 260px; overflow-y:auto; overscroll-behavior: contain; display:flex; flex-direction:column; gap:4px; }
+.hfc-make-row { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:6px; cursor:pointer; }
+.hfc-make-row:hover { background:#f1f5f9; }
+.hfc-make-row input[type="checkbox"] { margin:0; accent-color: #0A58FF; }
+.hfc-make-row input[type="checkbox"]:focus-visible { outline: 2px solid #0A58FF; outline-offset: 2px; border-radius: 2px; }
+.hfc-make-row input:checked + span { font-weight: 600; color: #0A58FF; }
+.hfc-make-row span:nth-child(2) { flex:1; font-size:14px; color:#0f172a; }
+.hfc-make-count { font-size:12px; color:#64748b; font-weight:600; }
+.hfc-make-actions { display:flex; gap:10px; justify-content:flex-end; padding-top:10px; border-top:1px solid #e2e8f0; }
+.hfc-make-actions .hfc-clear {
+  width: auto;
+  min-width: 64px;
+  flex: none;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6B7280;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  text-align: center;
+}
+.hfc-make-actions .hfc-clear:hover {
+  background: #f3f4f6;
+  border-color: #cbd5e1;
+  color: #0A192F;
+}
+.hfc-make-actions .hfc-clear:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+}
+.hfc-make-actions .hfc-opt.hfc-selected {
+  width: auto;
+  min-width: 64px;
+  flex: none;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #0A58FF;
+  border: 1px solid #0A58FF;
+  border-radius: 8px;
+  text-align: center;
+}
+.hfc-make-actions .hfc-opt.hfc-selected:hover {
+  background: #0a4ed1;
+  border-color: #0a4ed1;
+}
+.hfc-make-actions .hfc-opt.hfc-selected:focus-visible {
+  outline: 2px solid #0A58FF;
+  outline-offset: 2px;
+}
+`;
+  document.head.appendChild(style);
+}
+
 function init(){
+  injectMakeSelectorStyles();
   fillMakes();
+  injectMakeSelectorStyles();
   bindEvents();
   bindCapsuleGlobalListeners();
   refreshCapsules();
@@ -326,7 +396,7 @@ function init(){
   initializeCatalog().catch(() => {});
 
   /* PERFORMANCE FIX: removed a "pre-warm" request here that used
-     count:"exact", head:true — that mode never returns rows, so it
+     count:"exact", head:true ? that mode never returns rows, so it
      could never populate vehicleCountCache. It was a wasted network
      request on every homepage load with zero effect. */
 }
@@ -367,18 +437,18 @@ function bindEvents(){
   document.getElementById("clearAllBtn")?.addEventListener("click", clearAll);
   document.getElementById("chipsClearBtn")?.addEventListener("click", clearAll);
 
-  // Visible "Clear Filters" inside the homepage preview results header —
+  // Visible "Clear Filters" inside the homepage preview results header ?
   // reuses the SAME existing clearAll() reset logic (no duplicate state).
   document.getElementById("previewClearBtn")?.addEventListener("click", clearAll);
 
-  // PHASE 4.6 — "View All": navigate to /browse carrying the EXACT same
+  // PHASE 4.6 ? "View All": navigate to /browse carrying the EXACT same
   // active token state via the EXISTING navigateToBrowseWithTokens()
   // serializer. Pure navigation; no new filtering/serialization logic.
   document.getElementById("previewViewAllBtn")?.addEventListener("click", () => {
     if(searchTokens.length) navigateToBrowseWithTokens();
   });
 
-  // PHASE 3B — LIST / GRID view switcher for the homepage preview.
+  // PHASE 3B ? LIST / GRID view switcher for the homepage preview.
   // Presentation only: the same results and vehicle cards are reused
   // for both views; this only toggles the container presentation mode.
   const previewViewToggle = document.getElementById("previewViewToggle");
@@ -416,7 +486,7 @@ function bindEvents(){
     /* TAB AUTOCOMPLETE (additive): Tab completes the highlighted (or
        first) suggestion INTO the input without applying it. Enter (or a
        click) still performs the actual apply through the EXISTING
-       handleSuggestionClick → applySmartPhrase pipeline. Plain-Enter
+       handleSuggestionClick ? applySmartPhrase pipeline. Plain-Enter
        search behaviour with no active suggestion is untouched. */
     if(e.key === "Tab") {
       e.preventDefault();
@@ -631,7 +701,7 @@ async function runLightSuggestions(query) {
      filter interaction is ever visible at a time. */
   closeAllCapsules();
 
-  /* 🔥 SMART INTENT SUGGESTIONS (local, instant, ADDITIVE)
+  /* ?? SMART INTENT SUGGESTIONS (local, instant, ADDITIVE)
      Generated from the shared intent layer (js/searchIntent.js)
      using the cached catalog makes. The existing local filter
      suggestions below remain completely untouched. */
@@ -673,7 +743,7 @@ function renderSuggestionRows(box, items, query){
   items.forEach(item => {
     const cat = item.type === "smart" ? "Smart Search" : getCategoryLabel(item.type);
     const count = getCount(item.type, item.value);
-    const countStr = count ? ` · ${count} vehicles` : "";
+    const countStr = count ? ` ? ${count} vehicles` : "";
     const extra = (item.type === "smart" && item.sublabel) ? ` - ${item.sublabel}` : "";
     html += `
     <div data-suggestion class="flex items-center gap-3 px-4 py-2.5 cursor-pointer text-[14px] text-[#081120] font-medium hover:bg-[#eef3f9] transition-colors border-b border-slate-100 last:border-b-0"
@@ -698,7 +768,7 @@ function renderSuggestionRows(box, items, query){
 HANDLE SUGGESTION CLICK
 ========================== */
 
-/* Shared single-select token logic — used by autocomplete suggestions
+/* Shared single-select token logic ? used by autocomplete suggestions
    and by the Phase 20 homepage filter capsules. */
 function addFilterToken(type, value, label) {
   const ft = FILTER_TYPES[type];
@@ -723,12 +793,12 @@ window.handleSuggestionClick = function(type, value, label) {
   if(input) input.focus();
 };
 
-/* 🔥 SMART PHRASE APPLICATION (ADDITIVE)
+/* ?? SMART PHRASE APPLICATION (ADDITIVE)
    A clicked intelligent suggestion is executed through the
    EXISTING machinery only:
-   • phrases mapping onto single-value filters become the
+   ? phrases mapping onto single-value filters become the
      existing filter capsules/tokens (with live preview)
-   • range/around-price or preference-only phrases go through
+   ? range/around-price or preference-only phrases go through
      submit(), which routes them via mapToBrowseFilters into
      the existing Browse pipeline */
 function intentToHomeTokens(intent){
@@ -787,7 +857,7 @@ function hideSuggestionsBox(){
    the homepage. Hard-filter parts become existing chips/tokens; soft
    parts (ranking preferences, around-price bands, engine-size
    targets) ride along as a "smartQuery" chip that updatePreview()
-   feeds through mapToBrowseFilters — the same existing pipeline —
+   feeds through mapToBrowseFilters ? the same existing pipeline ?
    for homepage preview results. No /browse navigation occurs. */
 function intentHasHardTokens(intent){
   return !!(intent.make || intent.model || intent.bodyType || intent.fuel ||
@@ -835,7 +905,7 @@ function applySmartPhrase(phrase){
      pure soft/ranking phrases that produce no hard tokens at all
      (around-price bands, finance targets, engine-size targets,
      ranking-only wording) because updatePreview()/mapToBrowseFilters
-     requires it to function — the existing architecture's one
+     requires it to function ? the existing architecture's one
      exception. */
   searchTokens = searchTokens.filter(t => t.type !== "smartQuery");
   const types = new Set(tokens.map(t => t.type));
@@ -917,7 +987,8 @@ function positionCapsuleDD(dd, btn){
   const r = btn.getBoundingClientRect();
   const vw = document.documentElement.clientWidth;
   const vh = window.innerHeight;
-  const width = Math.max(210, Math.min(260, vw - 16));
+  const isMake = dd.id === "hfcDD-make";
+  const width = isMake ? Math.max(320, Math.min(420, vw - 16)) : Math.max(210, Math.min(260, vw - 16));
   dd.style.width = width + "px";
   dd.style.position = "fixed";
   dd.style.zIndex = "80";
@@ -933,28 +1004,34 @@ function positionCapsuleDD(dd, btn){
 
 async function loadCapsuleOptions(type){
   if(type === "make"){
-    if(!capsuleCache.makes){
-      const values = await getMakes();
-      if(values && values.length) capsuleCache.makes = values;
-    }
-    return { options: capsuleCache.makes || [], emptyMsg: "No makes available yet" };
+    const counts = await getVehicleMakeCounts();
+    const values = Object.keys(counts).sort((a,b)=>a.localeCompare(b));
+    capsuleCache.makes = values;
+    return { options: values, counts, emptyMsg: "No makes available yet" };
   }
   if(type === "model"){
     const makeTok = getToken("make");
     if(!makeTok) return { needsMake: true, options: [], emptyMsg: "" };
-    const mk = makeTok.value;
-    if(!capsuleCache.modelsByMake[mk]){
-      const values = await getModels(mk);
-      if(values && values.length) capsuleCache.modelsByMake[mk] = values;
+    const makes = String(makeTok.value).split(",").map(v=>v.trim()).filter(Boolean);
+    const cacheKey = makes.join(",");
+    if(!capsuleCache.modelsByMake[cacheKey]){
+      const values = [];
+      for(const mk of makes){
+        const models = await getModels(mk);
+        (models || []).forEach(m => { if(!values.includes(m)) values.push(m); });
+      }
+      values.sort((a,b)=>String(a).localeCompare(String(b)));
+      if(values.length) capsuleCache.modelsByMake[cacheKey] = values;
     }
-    return { options: capsuleCache.modelsByMake[mk] || [], emptyMsg: "No models found for this make" };
+    return { options: capsuleCache.modelsByMake[cacheKey] || [], emptyMsg: "No models found for this make" };
   }
   if(type === "body"){
     if(!capsuleCache.body){
       const values = await getBodyTypes();
       if(values && values.length) capsuleCache.body = values;
     }
-    return { options: capsuleCache.body || [], emptyMsg: "No body types available yet" };
+    const __bodyCounts = await getVehicleBodyCounts();
+    return { options: capsuleCache.body || [], counts: __bodyCounts, emptyMsg: "No body types available yet" };
   }
   if(type === "fuel"){
     if(!capsuleCache.fuel){
@@ -992,7 +1069,7 @@ async function loadCapsuleOptions(type){
 
 /* Options and the Clear row are built with DOM APIs + textContent so
    catalog values of any shape are rendered safely (no string escaping). */
-function renderCapsuleOptions(type, options, emptyMsg){
+function renderCapsuleOptions(type, options, emptyMsg, counts){
   const dd = document.getElementById("hfcDD-" + type);
   if(!dd) return;
   const current = getToken(type);
@@ -1042,6 +1119,222 @@ function renderCapsuleOptions(type, options, emptyMsg){
   dd.appendChild(list);
 }
 
+function renderMakeCapsule(dd, result){
+  const options = (result.options || []).slice().sort((a,b)=>String(a).localeCompare(String(b)));
+  const counts = result.counts || {};
+  const current = getToken("make");
+  let selected = new Set(current ? String(current.value).split(",").map(v=>v.trim()).filter(Boolean) : []);
+  let query = "";
+
+  dd.innerHTML = "";
+
+  const wrap = document.createElement("div");
+  wrap.className = "hfc-make-wrap";
+
+  // Search
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Search makes...";
+  search.className = "hfc-make-search";
+  search.addEventListener("input", () => { query = search.value; renderList(); });
+  search.addEventListener("keydown", (e) => { if(e.key === "Enter") e.preventDefault(); });
+  wrap.appendChild(search);
+
+  // Any row
+  const anyRow = document.createElement("label");
+  anyRow.className = "hfc-make-row";
+  const anyCb = document.createElement("input");
+  anyCb.type = "checkbox";
+  anyCb.checked = false;
+  anyCb.addEventListener("change", () => {
+    if(anyCb.checked){ selected = new Set(options); }
+    else { selected.clear(); }
+    renderList();
+  });
+  const anyLabel = document.createElement("span");
+  anyLabel.textContent = "All";
+  const anyCount = document.createElement("span");
+  anyCount.className = "hfc-make-count";
+  anyCount.textContent = "";
+  anyRow.append(anyCb, anyLabel, anyCount);
+  wrap.appendChild(anyRow);
+
+  const list = document.createElement("div");
+  list.className = "hfc-make-list";
+  wrap.appendChild(list);
+
+  function renderList(){
+    list.innerHTML = "";
+    const q = query.toLowerCase().trim();
+    let filtered = options;
+    if(q) filtered = options.filter(m => String(m).toLowerCase().includes(q));
+    if(!filtered.length){
+      const empty = document.createElement("div");
+      empty.className = "hfc-empty";
+      empty.textContent = "No makes match";
+      list.appendChild(empty);
+      return;
+    }
+    filtered.forEach(m => {
+      const mv = String(m);
+      const row = document.createElement("label");
+      row.className = "hfc-make-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selected.has(mv);
+      cb.addEventListener("change", () => {
+        if(cb.checked){ selected.add(mv); }
+        else { selected.delete(mv); }
+        anyCb.checked = (selected.size === options.length && options.length > 0);
+        renderList();
+      });
+      const name = document.createElement("span");
+      name.textContent = mv;
+      const cnt = document.createElement("span");
+      cnt.className = "hfc-make-count";
+      cnt.textContent = `(${counts[mv] || 0})`;
+      row.append(cb, name, cnt);
+      list.appendChild(row);
+    });
+    anyCb.checked = (selected.size === options.length && options.length > 0);
+  }
+  renderList();
+
+  // Actions
+  const actions = document.createElement("div");
+  actions.className = "hfc-make-actions";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.textContent = "Reset";
+  resetBtn.className = "hfc-clear";
+  resetBtn.addEventListener("click", () => { selected.clear(); renderList(); if(typeof removeTokenType === "function"){ removeTokenType("make"); removeTokenType("model"); } });
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.textContent = "Apply";
+  applyBtn.className = "hfc-opt hfc-selected";
+  applyBtn.addEventListener("click", async () => {
+    if(selected.size){
+const vals = [...selected];
+      await window.selectHomeCapsuleValue("make", vals.join(","), vals.join(", "));
+    } else {
+      if(typeof removeTokenType === "function"){ removeTokenType("make"); removeTokenType("model"); }
+    }
+    closeAllCapsules();
+  });
+  actions.append(resetBtn, applyBtn);
+  wrap.appendChild(actions);
+
+  dd.appendChild(wrap);
+  setTimeout(() => search.focus(), 0);
+}
+
+
+function renderBodyCapsule(dd, result){
+  const options = (result.options || []).slice().sort((a,b)=>String(a).localeCompare(String(b)));
+  const counts = result.counts || {};
+  const current = getToken("body");
+  let selected = new Set(current ? String(current.value).split(",").map(v=>v.trim()).filter(Boolean) : []);
+  let query = "";
+
+  dd.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "hfc-make-wrap";
+
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Search body types...";
+  search.className = "hfc-make-search";
+  search.addEventListener("input", () => { query = search.value; renderList(); });
+  search.addEventListener("keydown", (e) => { if(e.key === "Enter") e.preventDefault(); });
+  wrap.appendChild(search);
+
+  const anyRow = document.createElement("label");
+  anyRow.className = "hfc-make-row";
+  const anyCb = document.createElement("input");
+  anyCb.type = "checkbox";
+  anyCb.checked = false;
+  anyCb.addEventListener("change", () => {
+    if(anyCb.checked){ selected = new Set(options); }
+    else { selected.clear(); }
+    renderList();
+  });
+  const anyLabel = document.createElement("span");
+  anyLabel.textContent = "All";
+  const anyCount = document.createElement("span");
+  anyCount.className = "hfc-make-count";
+  anyCount.textContent = "";
+  anyRow.append(anyCb, anyLabel, anyCount);
+  wrap.appendChild(anyRow);
+
+  const list = document.createElement("div");
+  list.className = "hfc-make-list";
+  wrap.appendChild(list);
+
+  function renderList(){
+    list.innerHTML = "";
+    const q = query.toLowerCase().trim();
+    let filtered = options;
+    if(q) filtered = options.filter(m => String(m).toLowerCase().includes(q));
+    if(!filtered.length){
+      const empty = document.createElement("div");
+      empty.className = "hfc-empty";
+      empty.textContent = "No body types match";
+      list.appendChild(empty);
+      return;
+    }
+    filtered.forEach(m => {
+      const mv = String(m);
+      const row = document.createElement("label");
+      row.className = "hfc-make-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selected.has(mv);
+      cb.addEventListener("change", () => {
+        if(cb.checked){ selected.add(mv); }
+        else { selected.delete(mv); }
+        anyCb.checked = (selected.size === options.length && options.length > 0);
+        renderList();
+      });
+      const name = document.createElement("span");
+      name.textContent = mv;
+      const cnt = document.createElement("span");
+      cnt.className = "hfc-make-count";
+      cnt.textContent = `(${counts[mv] || 0})`;
+      row.append(cb, name, cnt);
+      list.appendChild(row);
+    });
+    anyCb.checked = (selected.size === options.length && options.length > 0);
+  }
+  renderList();
+
+  const actions = document.createElement("div");
+  actions.className = "hfc-make-actions";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.textContent = "Reset";
+  resetBtn.className = "hfc-clear";
+  resetBtn.addEventListener("click", () => { selected.clear(); renderList(); if(typeof removeTokenType === "function"){ removeTokenType("body"); } });
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.textContent = "Apply";
+  applyBtn.className = "hfc-opt hfc-selected";
+  applyBtn.addEventListener("click", async () => {
+    if(selected.size){
+      const vals = [...selected];
+      await window.selectHomeCapsuleValue("body", vals.join(","), vals.join(", "));
+    } else {
+      if(typeof removeTokenType === "function"){ removeTokenType("body"); }
+    }
+    closeAllCapsules();
+  });
+  actions.append(resetBtn, applyBtn);
+  wrap.appendChild(actions);
+
+  dd.appendChild(wrap);
+  setTimeout(() => search.focus(), 0);
+}
+
+
 async function openCapsuleDropdown(type){
   closeAllCapsules();
   const btn = document.getElementById("hfcBtn-" + type);
@@ -1069,6 +1362,10 @@ async function openCapsuleDropdown(type){
           <div class="hfc-dd-sub">Models are listed per manufacturer.</div>
           <button type="button" onclick="switchCapsule('make')" class="hfc-dd-link">Choose a Make &rarr;</button>
         </div>`;
+    } else if(type === "make"){
+      renderMakeCapsule(dd, result);
+    } else if(type === "body"){
+      renderBodyCapsule(dd, result);
     } else {
       renderCapsuleOptions(type, result.options, result.emptyMsg);
     }
@@ -1083,8 +1380,8 @@ async function openCapsuleDropdown(type){
 
 function closeAllCapsules(){
   /* SINGLE ACTIVE FILTER CONTROL: hide EVERY portalled dropdown panel
-     and reset EVERY capsule button/chevron — not just the one tracked
-     in openCapsule — so a stale dropdown can never remain visible. */
+     and reset EVERY capsule button/chevron ? not just the one tracked
+     in openCapsule ? so a stale dropdown can never remain visible. */
   document.querySelectorAll(".hfc-dd").forEach(dd => dd.classList.add("hidden"));
   CAPSULE_DEFS.forEach(def => {
     document.getElementById("hfcBtn-" + def.type)?.classList.remove("hfc-open");
@@ -1106,10 +1403,16 @@ async function enforceModelValidity(){
   const modelTok = getToken("model");
   if(!modelTok) return;
   if(!makeTok){ removeTokenType("model"); return; }
+  const makes = String(makeTok.value).split(",").map(v=>v.trim()).filter(Boolean);
+  if(!makes.length){ removeTokenType("model"); return; }
   try {
-    const models = await getModels(makeTok.value);
+    const models = [];
+    for(const mk of makes){
+      const ms = await getModels(mk);
+      (ms || []).forEach(m => { if(!models.includes(m)) models.push(m); });
+    }
     if(models.length && !models.includes(modelTok.value)) removeTokenType("model");
-  } catch(e) { /* catalog unavailable — keep existing selection */ }
+  } catch(e) { /* catalog unavailable ? keep existing selection */ }
 }
 
 window.toggleHomeCapsule = function(type){
@@ -1159,10 +1462,10 @@ PREVIEW
 
 let previewRequestId = 0;
 
-/* PHASE 3B — LIST / GRID view switcher.
+/* PHASE 3B ? LIST / GRID view switcher.
    Toggles the presentation class on #previewGrid and the active state
    of the segmented control. Uses the SAME rendered results for both
-   views — the search query, filters and data are never re-run here. */
+   views ? the search query, filters and data are never re-run here. */
 function setPreviewView(view) {
   const mode = view === "grid" ? "grid" : "list";
   previewViewMode = mode;
@@ -1231,7 +1534,7 @@ async function updatePreview() {
 
     /* smartQuery chip: the existing adapter fully understands the
        natural-language phrase (preferences, around-price bands,
-       engine-size targets, mileage ceilings, city/province…) and
+       engine-size targets, mileage ceilings, city/province?) and
        merges it under the hard token filters above. */
     const browseFilters = mapToBrowseFilters({ ...filters, ...(smartQ ? { q: smartQ } : {}) });
     const { data, count } = await searchVehicles(browseFilters, { limit: 8 });
@@ -1247,9 +1550,12 @@ async function updatePreview() {
       grid.innerHTML = `<div class="col-span-full text-center py-6"><p class="text-[14px] font-medium text-slate-400">No matching vehicles found</p><p class="text-[12px] text-slate-300 mt-1">Try changing one or more filters</p></div>`;
       footer.innerHTML = ""; return;
     }
-    grid.innerHTML = data.slice(0, 8).map(v => renderVehicleCard(v, { actions: "browse" })).join("");
+    grid.innerHTML = data.slice(0, 8).map(v => renderVehicleCard(v, {
+      actions: "browse",
+      detailLevel: getCardDetailLevel()
+    })).join("");
     if(count > 8) {
-footer.innerHTML = `<button onclick="navigateToBrowseWithTokens()" class="text-[12px] font-medium text-[#3B82F6] hover:underline">View all ${count} matching vehicles →</button>`;
+footer.innerHTML = `<button onclick="navigateToBrowseWithTokens()" class="text-[12px] font-medium text-[#3B82F6] hover:underline">View all ${count} matching vehicles ?</button>`;
     } else { footer.innerHTML = ""; }
   } catch(e) {
     console.error("Preview update failed:", e);
@@ -1287,7 +1593,7 @@ function runAI(query){
   if(intent.make) parts.push(intent.make);
   if(intent.body_type) parts.push(intent.body_type);
   if(intent.priceMax) parts.push("Under R " + intent.priceMax);
-  if(box) box.innerText = parts.length ? "Searching: " + parts.join(" • ") : "";
+  if(box) box.innerText = parts.length ? "Searching: " + parts.join(" ? ") : "";
 }
 
 async function submit(){
@@ -1301,7 +1607,7 @@ async function submit(){
   if(q){ saveRecentSearch(q); }
 
   /* PHASE 2 FIX: a recognized Smart Search phrase NEVER navigates to
-     /browse — it becomes chips + homepage preview results. */
+     /browse ? it becomes chips + homepage preview results. */
   if(q){
     const intent = parseSearchIntent(q);
     if(intentIsRecognized(intent)){ applySmartPhrase(q); return; }
@@ -1391,7 +1697,7 @@ function renderChips(){
   if(intent.priceMax) chips.push({key:"priceMax", value:"Under R " + intent.priceMax});
   if(intent.transmission) chips.push({key:"trans", value:intent.transmission});
   if(intent.affordableOnly) chips.push({key:"finance", value:"Affordable"});
-  box.innerHTML = chips.map(c => `<div class="chip">${c.value}<span onclick="removeChip('${c.key}')">âœ•</span></div>`).join("");
+  box.innerHTML = chips.map(c => `<div class="chip">${c.value}<span onclick="removeChip('${c.key}')">?</span></div>`).join("");
 }
 
 window.removeChip = function(key){

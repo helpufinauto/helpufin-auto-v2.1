@@ -1,4 +1,4 @@
-import { supabase } from "../js/api.js";
+import { supabase, getUserProfile } from "../js/api.js";
 import { navigate } from "../js/router.js";
 import { renderDashboardShell, renderDashboardPageHeading, getActiveListLimit } from "./dashboard.js";
 import { toast } from "../js/ui.js";
@@ -10,6 +10,9 @@ import {
   getMakes,
   getModels,
   getVariants,
+  getHufaCatalogYears,
+  getHufaCatalogVariants,
+  isHufaCatalogAvailable,
   getBodyTypes,
   getFuelTypes,
   getTransmissionTypes,
@@ -25,6 +28,23 @@ import {
   getChargingTimes,
   getEngineCapacities
 } from "../js/catalog.js";
+
+import {
+  saveDraft as saveUploadDraftRecord,
+  loadDraft as loadUploadDraftRecord,
+  clearDraft as clearUploadDraftRecord
+} from "../js/draftStore.js";
+
+/* PHASE 4 — dedicated IndexedDB image-draft store (Upload
+Vehicle create mode only). Kept separate from the Phase 2
+sessionStorage text draft: image bytes can never enter
+draftStore. All operations are fail-safe and silent. */
+import {
+  saveUploadVehicleImageDraft,
+  loadUploadVehicleImageDraft,
+  clearUploadVehicleImageDraft
+} from "../js/uploadVehicleImageStore.js";
+
 // Vehicle catalogue is now loaded from the database.
 
 /* =========================================================
@@ -44,16 +64,1142 @@ let activeFeatureCategory = "";
 
 let publishInProgress = false;
 
-/* =========================================
+let cachedDraftUserId = null;
+
+let uploadDraftSaveTimer = null;
+
+let uploadDraftRestoring = false;
+
+/* =========================================================
+HUFA CATALOGUE VARIANT SELECTION (ISOLATED UI STATE)
+---------------------------------------------------------
+selectedHufaCatalog holds the ONE exact catalogue row the
+seller picked via SELECT (never invented, always the DB row).
+hufaCatalogYears caches catalogue years for make+model so the
+year select never invents years. hufaCatalogRequestSeq guards
+against stale async catalogue responses overwriting fresh UI.
+The legacy #variant dropdown + OTHER/manual route stay intact
+and are only hidden while exact catalogue results are shown.
+Persistence boundary (no schema change): the SELECTED identity
+(id + vehicle_code + variant + year) lives in this page state and
+is mirrored into hidden inputs so the SAME text draft restores
+it. `vehicles` has NO catalogue-identity column, so nothing
+catalogue-specific is written to the database — the selection's
+outcome is persisted through the EXISTING columns the form
+already submits (variant, year, body_type, fuel_type,
+transmission, drive_type, doors, seats).
+
+========================================================= */
+let selectedHufaCatalog = null;
+/* Values written by the last catalogue selection. A later selection
+can replace/clear these only while the seller has left them unchanged. */
+const hufaCatalogFormWrites = new Map();
+let hufaCatalogYears = [];
+let hufaCatalogRows = [];
+let hufaCatalogRequestSeq = 0;
+let hufaYearMode = "manual";
+/* Seller picked "enter the variant manually instead" for the
+current Make + Model: the catalogue block steps aside and the
+legacy Variant + manual Year fields come back until the next
+Make/Model change (which resets this in hufaCatalogRefreshYears). */
+let hufaCatalogManualOverride = false;
+/* PHASE 2 FINAL REFINEMENT — catalogue presentation option.
+"DETAILED VIEW" is the DEFAULT (full catalogue table, seller identity
+first: SELECT + VARIANT stay pinned on the left and the HUFA Vehicle
+Code closes the row) and "CARD VIEW"
+is the SECOND option (the existing responsive cards). Presentation
+only: both views are rendered from the SAME hufaCatalogRows array,
+share ONE shared result-count element and ONE SELECT handler, and
+switching views never re-queries the catalogue and never touches
+the selected record. */
+let hufaCatalogView = "detailed";
+
+/* PHASE 4 — image draft state. scheduleUploadImageDraftSave
+debounces IndexedDB writes; uploadImageDraftRestoring
+suppresses saves while a restore is being applied (the
+same guard pattern as the text draft). */
+let uploadImageDraftSaveTimer = null;
+
+let uploadImageDraftRestoring = false;
+
+/* PHASE 4 — duplicate-restore protection (Part 15): an
+in-flight guard so a remount racing an unfinished restore
+can never append the same persisted images twice. */
+let uploadImageDraftRestoreInFlight = false;
+
+/* PHASE 4 — set after a successful restore so a synchronous
+renderPreview() from later initialization never overwrites
+the restored selection with an empty persist. */
+let uploadImageDraftRestoredThisMount = false;
+
+const UPLOAD_DRAFT_WORKFLOW = "uploadVehicle";
+
+/* Explicit allowlist of non-file Upload Vehicle draft fields,
+verified against the CURRENT form template: there are no
+"type", "mileageUnit", "engineCapacity", "engineSize", "powerKw"
+or finance-input ids in the page (finance amounts are engine-
+calculated, EV uses the battery and charging selects, motorcycles
+use engineCapacityCc). province/city are the only location selects;
+year/mileage/price are plain inputs; trans/drive/doors/seats/
+owners are plain selects; seller is the readonly profile-derived
+input; location is a hidden derived field. No file/blob/token
+keys. */
+const UPLOAD_TEXT_DRAFT_IDS = [
+  "vehicleCategory",
+  "commercialCategory",
+  "cabConfiguration",
+  "payloadCapacityKg",
+  "towingCapacityKg",
+  "condition",
+  "trans",
+  "drive",
+  "seller",
+  "make",
+  "model",
+  "variant",
+  "year",
+  "mileage",
+  "body",
+  "color",
+  "fuel",
+  "batteryCapacity",
+  "batteryRange",
+  "chargingTime",
+  "motorcycleType",
+  "engineCapacityCc",
+  "province",
+  "city",
+  "price",
+  "description",
+  "doors",
+  "seats",
+  "owners",
+  "warrantyExpiry",
+  "servicePlanExpiry",
+  "maintenancePlanExpiry",
+  /* PHASE 5 — existing template inputs consumed by the publish
+  flow when "Other / Not Listed" is selected. Plain text only. */
+  "customModel",
+  "customVariant",
+  /* HUFA catalogue selection identity (hidden inputs created at
+  runtime beside #variant; persisted through the SAME text draft
+  so refresh keeps the exact selected catalogue row). The year is
+  stored as hufaCatalogYearValue because #hufaCatalogYear is the
+  VISIBLE catalogue-year <select> — a hidden input must never
+  share that id. */
+  "hufaCatalogId",
+  "hufaCatalogCode",
+  "hufaCatalogVariant",
+  "hufaCatalogYearValue",
+  /* The VISIBLE catalogue-year dropdown is drafted too, so a year
+  the seller picked without pressing SELECT survives a refresh.
+  Its options are rebuilt on restore before the value is applied
+  (a select with no matching option silently ignores .value). */
+  "hufaCatalogYear",
+  "hufaCatalogView",
+  "hufaSpec_cc",
+  "hufaSpec_engine_size_l",
+  "hufaSpec_kw",
+  "hufaSpec_torque_nm",
+  "hufaSpec_cylinders",
+  "hufaSpec_fuel_consumption_l100",
+  "hufaSpec_co2_emissions_gkm",
+  "hufaSpec_electric_range_km",
+  /* "Enter the variant manually instead" override: persisted so a
+  seller who abandoned the catalogue for this Make + Model still
+  sees the plain Variant + Year fields after a page reload. */
+  "hufaCatalogManual",
+  /* PHASE 5 — #vehicleSearch (Search Vehicle helper input).
+  Persisted with the SAME draft and restored by the SAME text
+  loop; restoring only writes the value (no input event is
+  dispatched), so the lookup dropdown cannot re-open on load. */
+  "vehicleSearch"
+];
+
+const UPLOAD_CHECKBOX_DRAFT_IDS = [
+  "financeAvailable",
+  "vatIncluded",
+  "priceNegotiable",
+  "serviceHistory",
+  "ownershipVerified",
+  "accidentFree",
+  "roadworthyCertificate",
+  "certifiedPreOwned",
+  "warrantyIncluded",
+  "servicePlanIncluded",
+  "maintenancePlanIncluded"
+];
+
+function uploadDraftEl(id){
+  return document.getElementById(id);
+}
+
+/* Resolves the current authenticated user id for the draft key.
+Result is cached per page session. Returns "" when signed out
+so no shared/anonymous draft can leak between users. */
+async function resolveUploadDraftUserId(){
+
+  if(typeof cachedDraftUserId === "string" && cachedDraftUserId){
+    return cachedDraftUserId;
+  }
+
+  try{
+
+    const { data } = await supabase.auth.getUser();
+
+    const id = data?.user?.id;
+
+    if(typeof id === "string" && id){
+      cachedDraftUserId = id;
+      return id;
+    }
+
+  }catch(e){}
+
+  return "";
+
+}
+
+function collectUploadDraft(){
+
+  const draft = {};
+
+  for(const id of UPLOAD_TEXT_DRAFT_IDS){
+
+    draft[id] =
+      typeof uploadDraftEl(id)?.value === "string"
+        ? uploadDraftEl(id).value
+        : "";
+
+  }
+
+  for(const id of UPLOAD_CHECKBOX_DRAFT_IDS){
+
+    draft[id] = uploadDraftEl(id)
+      ? uploadDraftEl(id).checked === true
+      : false;
+
+  }
+
+  draft.hufaCatalogBooleanSpecs = {};
+  for(const key of ["turbocharged", "fast_charging"]){
+    const field = uploadDraftEl(`hufaSpec_${key}`);
+    if(field){ draft.hufaCatalogBooleanSpecs[key] = field.checked === true; }
+  }
+
+  draft.selectedFeatures = [...selectedFeatures];
+
+  return draft;
+
+}
+
+function isSafeUploadDraft(value){
+
+  if(!value || typeof value !== "object" || Array.isArray(value)){
+    return false;
+  }
+
+  const allowed = new Set([
+    ...UPLOAD_TEXT_DRAFT_IDS,
+    ...UPLOAD_CHECKBOX_DRAFT_IDS,
+    "selectedFeatures",
+    "activeFeatureCategory",
+    "featureSearch",
+    "hufaCatalogBooleanSpecs"
+  ]);
+
+  for(const key of Object.keys(value)){
+
+    if(!allowed.has(key)){
+      return false;
+    }
+
+    if(key === "selectedFeatures"){
+
+      if(!Array.isArray(value[key])){
+        return false;
+      }
+
+      for(const item of value[key]){
+
+        if(typeof item !== "string"){
+          return false;
+        }
+
+      }
+
+      continue;
+
+    }
+
+    if(key === "hufaCatalogBooleanSpecs"){
+      if(!value[key] || typeof value[key] !== "object" || Array.isArray(value[key])) return false;
+      if(Object.keys(value[key]).some((specKey)=>!["turbocharged", "fast_charging"].includes(specKey) || typeof value[key][specKey] !== "boolean")) return false;
+      continue;
+    }
+
+    if(UPLOAD_CHECKBOX_DRAFT_IDS.includes(key)){
+
+      if(typeof value[key] !== "boolean"){
+        return false;
+      }
+
+      continue;
+
+    }
+
+    if(typeof value[key] !== "string"){
+      return false;
+    }
+
+  }
+
+  return true;
+
+}
+
+/* PHASE 5 — synchronous text-draft write. Safe to call during
+pagehide because it never awaits: it reads the CURRENT DOM and
+writes sessionStorage immediately. The caller must have a
+known user id (cachedDraftUserId). Returns true when written. */
+function writeUploadTextDraft(){
+
+  if(typeof cachedDraftUserId !== "string" || !cachedDraftUserId){
+    return false;
+  }
+
+  const draft = collectUploadDraft();
+
+  /* PHASE 5 — blank-overwrite guard: if EVERY persisted field
+  is empty (typically because the timer fired after SPA
+  navigation replaced the form DOM), keep the existing draft
+  instead of destroying it with empty values. A real
+  all-blank form state is still written whenever at least one
+  checkbox/feature remains, and the publish flow clears the
+  draft explicitly on success. */
+  const anyText =
+  UPLOAD_TEXT_DRAFT_IDS.some(
+    (id) => (draft[id] || "").trim().length > 0
+  );
+
+  const anyChecked =
+  UPLOAD_CHECKBOX_DRAFT_IDS.some(
+    (id) => draft[id] === true
+  );
+
+  const anyCatalogBooleanChecked = Object.values(draft.hufaCatalogBooleanSpecs).some(Boolean);
+
+  if(
+    !anyText &&
+    !anyChecked &&
+    !anyCatalogBooleanChecked &&
+    !draft.selectedFeatures.length
+  ){
+    return false;
+  }
+
+  saveUploadDraftRecord(
+    UPLOAD_DRAFT_WORKFLOW,
+    cachedDraftUserId,
+    {
+      ...draft,
+      activeFeatureCategory,
+      featureSearch: uploadDraftEl("featureSearch")?.value || ""
+    },
+    /* Account/seller type metadata mirrors the visible
+    seller control; no new account behaviour is invented. */
+    { accountType: draft.seller || "" }
+  );
+
+  return true;
+
+}
+
+/* PHASE 5 — immediate (non-debounced) text-draft write. Used
+by the debounced scheduler; the pagehide flush uses the
+synchronous writeUploadTextDraft() fast path instead, because
+an awaited auth call can never complete during page unload. */
+async function saveUploadTextDraftNow(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(uploadDraftRestoring){
+    return;
+  }
+
+  const userId = await resolveUploadDraftUserId();
+
+  if(!userId){
+    return;
+  }
+
+  writeUploadTextDraft();
+
+}
+
+function scheduleUploadDraftSave(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(uploadDraftRestoring){
+    return;
+  }
+
+  if(uploadDraftSaveTimer){
+    clearTimeout(uploadDraftSaveTimer);
+  }
+
+  uploadDraftSaveTimer = setTimeout(()=>{
+
+    uploadDraftSaveTimer = null;
+
+    saveUploadTextDraftNow();
+
+  }, 400);
+
+}
+
+/* PHASE 5 — flush a pending text-draft write immediately
+(pagehide / SPA-nav click). When the user id is already cached
+(the normal case after restore) the write is done
+SYNCHRONOUSLY so it always lands inside pagehide; otherwise it
+falls back to the async path. */
+function flushUploadTextDraftNow(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(!uploadDraftSaveTimer){
+    return;
+  }
+
+  clearTimeout(uploadDraftSaveTimer);
+
+  uploadDraftSaveTimer = null;
+
+  if(typeof cachedDraftUserId === "string" && cachedDraftUserId){
+
+    try{
+      writeUploadTextDraft();
+    }catch(e){}
+
+    return;
+
+  }
+
+  saveUploadTextDraftNow().catch(()=>{});
+
+}
+
+/* PHASE 5 — one pagehide listener per MODULE LIFETIME: a
+pending debounced text-draft write is flushed on refresh, tab
+close and SPA navigation away, so the last typed values can
+never be lost inside the un-fired 400ms timer. */
+window.addEventListener(
+  "pagehide",
+  ()=>{
+    flushUploadTextDraftNow();
+  }
+);
+
+/* PHASE 5 — SPA navigation does NOT fire pagehide (no document
+unload on pushState navigation), so a click on any in-app
+navigation control flushes the pending draft first, in the
+capture phase, BEFORE the router unmounts the form DOM.
+Matching is deliberately narrow: real anchors with data-link /
+href, and elements whose inline onclick starts a navigate()/
+loadView()/goDashboardView() call. Ordinary form clicks are
+untouched. */
+document.addEventListener(
+  "click",
+  (e)=>{
+
+    if(isEdit){
+      return;
+    }
+
+    if(!uploadDraftSaveTimer){
+      return;
+    }
+
+    const target = e.target;
+
+    if(!(target instanceof Element)){
+      return;
+    }
+
+    const navEl =
+    target.closest(
+      "a[href], a[data-link], [data-link], " +
+      "[onclick*='navigate('], " +
+      "[onclick*='loadView('], " +
+      "[onclick*='goDashboardView(']"
+    );
+
+    if(navEl){
+      flushUploadTextDraftNow();
+    }
+
+  },
+  true
+);
+
+function setUploadDraftText(id, value){
+
+  if(typeof value !== "string"){
+    return;
+  }
+
+  const el = uploadDraftEl(id);
+
+  if(!el || typeof el.value === "undefined"){
+    return;
+  }
+
+  el.value = value;
+
+}
+
+function setUploadDraftCheckbox(id, value){
+
+  const el = uploadDraftEl(id);
+
+  if(!el || typeof el.checked === "undefined"){
+    return;
+  }
+
+  el.checked = value === true;
+
+}
+
+function setUploadDraftSelect(id, value){
+
+  if(typeof value !== "string" || !value){
+    return;
+  }
+
+  const el = uploadDraftEl(id);
+
+  if(!el || !el.options){
+    return;
+  }
+
+  for(const opt of el.options){
+
+    if(opt.value === value){
+      el.value = value;
+      return;
+    }
+
+  }
+
+}
+
+async function restoreUploadDraft(){
+
+  /* Edit mode never consumes the create draft. */
+  if(isEdit){
+    return;
+  }
+
+  const userId = await resolveUploadDraftUserId();
+
+  if(!userId){
+    return;
+  }
+
+  const draft = loadUploadDraftRecord(
+    UPLOAD_DRAFT_WORKFLOW,
+    userId
+  );
+
+  if(!draft || !isSafeUploadDraft(draft)){
+    return;
+  }
+
+  /* Suppress debounced saves while values are applied. */
+  uploadDraftRestoring = true;
+
+  try{
+
+    /* 1. Controlling fields first. vehicleCategory drives the
+    make catalogue (fillMakes filters by category), so re-fill
+    make options for the restored category before selecting. */
+    setUploadDraftSelect("vehicleCategory", draft.vehicleCategory);
+
+    /* PHASE 5 — AWAITED: the toggle repopulates the make
+    catalogue for the restored category, so Make/Model/Variant
+    below are applied against a POPULATED option list in strict
+    dependency order (Vehicle Type → Make → Model → Variant).
+    (The old standalone fillMakes() immediately before this call
+    was PROVABLY redundant — the toggle clears #make and awaits
+    its own fillMakes() for the same live category — so one
+    duplicate catalogue round-trip per init was removed here.) */
+    await toggleVehicleCategory();
+
+    /* Commercial cascade: commercialCategory rebuilds the cab
+    option set (updateCabConfigurations), then cab determines
+    the payload/towing option sets. Restore in that order. */
+    setUploadDraftSelect("commercialCategory", draft.commercialCategory);
+
+    updateCabConfigurations();
+
+    setUploadDraftSelect("cabConfiguration", draft.cabConfiguration);
+
+    updatePayloadOptions(
+      uploadDraftEl("commercialCategory")?.value || "",
+      uploadDraftEl("cabConfiguration")?.value || ""
+    );
+    updateTowingOptions(
+      uploadDraftEl("commercialCategory")?.value || "",
+      uploadDraftEl("cabConfiguration")?.value || ""
+    );
+
+    setUploadDraftSelect("payloadCapacityKg", draft.payloadCapacityKg);
+    setUploadDraftSelect("towingCapacityKg", draft.towingCapacityKg);
+
+    /* Selects populated by catalogue init; set only when the
+    option already exists to avoid clobbering init. seller is
+    NOT restored here: it is the readonly profile-derived input
+    prefilled from the account profile at init. */
+    setUploadDraftSelect("condition", draft.condition);
+    toggleMileageField();
+    setUploadDraftSelect("trans", draft.trans);
+    setUploadDraftSelect("drive", draft.drive);
+    setUploadDraftSelect("body", draft.body);
+    setUploadDraftSelect("color", draft.color);
+    setUploadDraftSelect("fuel", draft.fuel);
+
+    toggleEVFields();
+    toggleMotorcycleFields();
+
+    setUploadDraftSelect("motorcycleType", draft.motorcycleType);
+    setUploadDraftSelect("engineCapacityCc", draft.engineCapacityCc);
+
+    /* 2. Cascading selects in dependency order. PHASE 5 — the
+    cascade now reuses the SAME live-path populators the change
+    handlers use (fillModels / fillVariants read the DOM values
+    set immediately above), so the "Other / Not Listed" options
+    exist and a restored __OTHER_MODEL__ / __OTHER__ selection
+    can actually be applied — the previous populate*Options path
+    never appended those options and silently dropped the value. */
+    setUploadDraftSelect("make", draft.make);
+
+    if(draft.make){
+      await fillModels();
+    }
+
+    setUploadDraftSelect("model", draft.model);
+
+    if(draft.make && draft.model){
+      await fillVariants();
+    }
+
+    setUploadDraftSelect("variant", draft.variant);
+
+    /* HUFA catalogue: hidden identity inputs are created lazily,
+    so ensure they exist before the generic text-restore loop
+    writes the persisted selection into them. They are plain
+    hidden inputs (no .options), so setUploadDraftSelect() above
+    ignores them and they are restored via setUploadDraftText(). */
+    hufaCatalogHiddenId("hufaCatalogId");
+    hufaCatalogHiddenId("hufaCatalogCode");
+    hufaCatalogHiddenId("hufaCatalogVariant");
+    hufaCatalogHiddenId("hufaCatalogYearValue");
+
+    setUploadDraftSelect("province", draft.province);
+
+    if(draft.province){
+      await populateCityOptions(draft.province);
+    }
+
+    setUploadDraftSelect("city", draft.city);
+
+    /* 3. Remaining text/number/date fields. seller is skipped:
+    it is readonly and profile-derived (re-prefilled at init). */
+    for(const id of UPLOAD_TEXT_DRAFT_IDS){
+
+      if(
+        id === "make" ||
+        id === "model" ||
+        id === "variant" ||
+        id === "province" ||
+        id === "city" ||
+        id === "seller"
+      ){
+        continue;
+      }
+
+      setUploadDraftText(id, draft[id]);
+
+    }
+
+    /* 4. Checkboxes as booleans. */
+    for(const id of UPLOAD_CHECKBOX_DRAFT_IDS){
+      setUploadDraftCheckbox(id, draft[id]);
+    }
+
+    /* 5. Conditional visibility from restored controllers. */
+    toggleEVFields();
+    toggleMotorcycleFields();
+    toggleFinanceFields();
+
+    /* PHASE 5 — custom model/variant visibility. These two
+    free-text inputs are part of the CURRENT form (used by the
+    publish flow when "Other / Not Listed" is selected) and are
+    persisted with the text allowlist; their show/hide state is
+    derived, so re-run the exact existing toggles here. */
+    toggleCustomModel();
+    toggleCustomVariant();
+
+    /* PHASE 5 — warranty/service/maintenance enable sync. A
+    programmatic .checked assignment fires no change event, so
+    the existing initForm sync (which disables/clears the expiry
+    input) would leave a restored "Included" checkbox with a
+    disabled date field. Re-dispatch the existing change event
+    for checked boxes only; uploadDraftRestoring suppresses any
+    draft save this would otherwise trigger. */
+    [
+      "warrantyIncluded",
+      "servicePlanIncluded",
+      "maintenancePlanIncluded"
+    ].forEach((cbId)=>{
+
+      const cb = uploadDraftEl(cbId);
+
+      if(cb && cb.checked){
+        cb.dispatchEvent(new Event("change"));
+      }
+
+    });
+
+    /* 5b. trans/drive/doors/seats/owners are plain template
+    selects (already set above); seller is readonly/profile-
+    derived and intentionally not re-applied from the draft. */
+
+    /* 6. Features: only values present in the catalogue. */
+    if(Array.isArray(draft.selectedFeatures) && FEATURE_OPTIONS.length){
+
+      const valid = new Set(FEATURE_OPTIONS.map((f) => f.value));
+
+      selectedFeatures = draft.selectedFeatures.filter((v) => valid.has(v));
+
+    } else if(Array.isArray(draft.selectedFeatures)){
+
+      selectedFeatures = [...draft.selectedFeatures];
+
+    }
+
+    if(typeof draft.activeFeatureCategory === "string" && draft.activeFeatureCategory){
+      activeFeatureCategory = draft.activeFeatureCategory;
+    }
+
+    const searchEl = uploadDraftEl("featureSearch");
+
+    if(searchEl && typeof draft.featureSearch === "string"){
+      searchEl.value = draft.featureSearch;
+    }
+
+    renderFeatureChips();
+
+    const hidden = uploadDraftEl("features");
+
+    if(hidden){
+      hidden.value = JSON.stringify(selectedFeatures);
+    }
+
+    const countEl = uploadDraftEl("featureCount");
+
+    if(countEl){
+      countEl.textContent = `${selectedFeatures.length} selected`;
+    }
+
+    /* 7. Description counter refresh. */
+    initDescriptionCounter();
+
+    /* HUFA catalogue: after the generic restore, rebuild the
+    Catalogue Year options for the restored Make + Model and, if
+    the draft held a catalogue selection, re-fetch that Year's
+    rows and re-apply the same catalogue id (fresh DB row wins).
+    Never invents codes: if the row is gone, identity clears and
+    the manual Variant/OTHER route remains. Runs while
+    uploadDraftRestoring is still true, so the spec fields applied
+    by a re-selected catalogue row cannot trigger a draft save. */
+    try{
+      await hufaCatalogRestoreFromDraft(draft);
+    }catch(e){}
+
+  }finally{
+
+    uploadDraftRestoring = false;
+
+  }
+
+}
+
+function bindUploadDraftListeners(){
+
+  /* Edit mode values must never feed the create draft. */
+  if(isEdit){
+    return;
+  }
+
+  const ids = new Set([
+    ...UPLOAD_TEXT_DRAFT_IDS,
+    ...UPLOAD_CHECKBOX_DRAFT_IDS,
+    "featureSearch",
+    "features"
+  ]);
+
+  for(const id of ids){
+
+    const el = uploadDraftEl(id);
+
+    if(!el || el.dataset.draftBound === "1"){
+      continue;
+    }
+
+    el.dataset.draftBound = "1";
+
+    el.addEventListener("input", scheduleUploadDraftSave);
+    el.addEventListener("change", scheduleUploadDraftSave);
+
+  }
+
+  /* Feature picker interactions re-render via renderFeatureChips
+  and update the hidden #features input; that input is already
+  bound above, but its value is changed programmatically (not by
+  user input events), so also listen on the picker containers. */
+  const chipContainers = [
+    "featureChips",
+    "selectedFeatureChips"
+  ];
+
+  for(const cid of chipContainers){
+
+    const c = uploadDraftEl(cid);
+
+    if(!c || c.dataset.draftBound === "1"){
+      continue;
+    }
+
+    c.dataset.draftBound = "1";
+
+    c.addEventListener("click", scheduleUploadDraftSave);
+    c.addEventListener("change", scheduleUploadDraftSave);
+
+  }
+
+}
+
+/* PHASE 2 — create-mode draft restore. Runs once per page
+session after catalogue options exist, so cascading selects
+(province→city, make→model→variant) restore in order and
+conditional sections/features/counter refresh correctly.
+Edit mode (?id=) never restores; failures are silent. */
+let uploadDraftRestoredThisSession = false;
+
+async function maybeRestoreUploadDraftOnce(){
+
+  if(uploadDraftRestoredThisSession){
+    return;
+  }
+
+  uploadDraftRestoredThisSession = true;
+
+  if(isEdit){
+    return;
+  }
+
+  try{
+    await restoreUploadDraft();
+  }catch(e){
+    bindUploadDraftListeners();
+    return;
+  }
+
+  bindUploadDraftListeners();
+
+  /* Draft restore rewrote #location from province/city, so
+  refresh the derived display in case it lagged. */
+  updateLocation();
+
+}
+
+/* =========================================================
 UPLOAD SESSION
 ========================================= */
+
+/* PHASE 4 — IMAGE DRAFT PERSISTENCE.
+Persist the current selectedFiles list (exact array order)
+to the dedicated IndexedDB store so images survive refresh,
+SPA navigation away/back and back/forward remounts.
+Create mode only, authenticated user only, and never while
+a restore is being applied. All failures are silent and
+never block the in-memory image flow. */
+function scheduleUploadImageDraftSave(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(uploadImageDraftRestoring){
+    return;
+  }
+
+  if(uploadImageDraftSaveTimer){
+    clearTimeout(uploadImageDraftSaveTimer);
+  }
+
+  /* Debounced: rapid move/cover operations coalesce into one
+  IndexedDB transaction instead of one per click. */
+  uploadImageDraftSaveTimer = setTimeout(async ()=>{
+
+    uploadImageDraftSaveTimer = null;
+
+    const userId =
+    await resolveUploadDraftUserId();
+
+    if(!userId){
+      return;
+    }
+
+    await saveUploadVehicleImageDraft(
+      userId,
+      [...selectedFiles]
+    );
+
+  }, 300);
+
+}
+
+/* PHASE 4 — restore the persisted image draft on a create-mode
+mount. Rebuilds REAL File objects (name/type/lastModified +
+bytes) so the existing renderPreview/replace/remove/move/
+publish pipeline consumes them unchanged. Enforces the
+existing MAX_IMAGES limit, skips invalid/corrupt entries and
+fails safely (a broken record can never crash the page). */
+async function restoreUploadImageDraft(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(uploadImageDraftRestoreInFlight){
+    return;
+  }
+
+  /* Something was already added this mount (or a previous
+  restore landed) — never double-load or overwrite it. */
+  if(
+    selectedFiles.length ||
+    uploadImageDraftRestoredThisMount
+  ){
+    return;
+  }
+
+  uploadImageDraftRestoreInFlight = true;
+
+  uploadImageDraftRestoring = true;
+
+  try{
+
+    const userId =
+    await resolveUploadDraftUserId();
+
+    if(!userId){
+      return;
+    }
+
+    const images =
+    await loadUploadVehicleImageDraft(userId);
+
+    if(
+      !Array.isArray(images) ||
+      !images.length
+    ){
+      return;
+    }
+
+    if(
+      selectedFiles.length ||
+      uploadImageDraftRestoredThisMount
+    ){
+      return;
+    }
+
+    const rebuilt = [];
+
+    for(const image of images){
+
+      /* MAX_IMAGES remains absolute: never restore more
+      than the existing pipeline would accept. */
+      if(rebuilt.length >= MAX_IMAGES){
+        break;
+      }
+
+      try{
+
+        if(
+          !image ||
+          typeof image !== "object" ||
+          !(image.bytes instanceof ArrayBuffer) ||
+          !image.bytes.byteLength
+        ){
+          continue;
+        }
+
+        rebuilt.push(
+          new File(
+            [image.bytes],
+            typeof image.name === "string" && image.name
+              ? image.name
+              : "image",
+            {
+              type:
+                typeof image.type === "string"
+                  ? image.type
+                  : "",
+              lastModified:
+                typeof image.lastModified === "number" &&
+                image.lastModified > 0
+                  ? image.lastModified
+                  : Date.now()
+            }
+          )
+        );
+
+      }catch(e){
+        /* Corrupt entry: skip it, keep the rest. */
+        continue;
+      }
+
+    }
+
+    if(
+      !rebuilt.length ||
+      selectedFiles.length ||
+      uploadImageDraftRestoredThisMount
+    ){
+      return;
+    }
+
+    selectedFiles = rebuilt;
+
+    uploadImageDraftRestoredThisMount = true;
+
+    renderPreview();
+
+  }catch(e){
+
+    /* Restoration is best-effort only: any failure leaves the
+    in-memory flow fully usable with an empty selection. */
+    console.warn(
+      "Upload image draft restore failed",
+      e
+    );
+
+  }finally{
+
+    uploadImageDraftRestoring = false;
+
+    uploadImageDraftRestoreInFlight = false;
+
+  }
+
+}
+
+/* PHASE 4 — clear ONLY the current authenticated user's
+Upload Vehicle image draft. Used after successful publish
+(alongside the Phase 2 text-draft clear; failures return
+before it, so failed publishes keep the draft). */
+function clearUploadImageDraftForCurrentUser(){
+
+  resolveUploadDraftUserId()
+    .then((draftUserId)=>{
+      if(draftUserId){
+        clearUploadVehicleImageDraft(draftUserId);
+      }
+    })
+    .catch(()=>{});
+
+}
+
+/* PHASE 5 — IMMEDIATE (non-debounced) image-draft save.
+Used by the pagehide flush: a debounced save still sitting in
+its 300ms timer would never fire on refresh/navigation, which
+is the actual reason images vanished between "add image" and
+"refresh". Runs only in create mode, never during a restore,
+and cancels any pending debounced write so the final state is
+always the one that lands.
+
+IMPORTANT — this flush must NEVER run against a selection that
+has not been initialised yet: if the page is refreshed while
+initForm is still restoring, selectedFiles is still empty and
+a naive save would DELETE the stored image record before the
+restore ever ran. The guard below only allows an empty write
+when THIS mount actually restored images first (i.e. the user
+then removed them all — a real, intended empty list). */
+async function flushUploadImageDraftNow(){
+
+  if(isEdit){
+    return;
+  }
+
+  if(uploadImageDraftRestoring){
+    return;
+  }
+
+  if(
+    !selectedFiles.length &&
+    !uploadImageDraftRestoredThisMount
+  ){
+    return;
+  }
+
+  if(uploadImageDraftSaveTimer){
+    clearTimeout(uploadImageDraftSaveTimer);
+    uploadImageDraftSaveTimer = null;
+  }
+
+  const userId =
+  await resolveUploadDraftUserId();
+
+  if(!userId){
+    return;
+  }
+
+  await saveUploadVehicleImageDraft(
+    userId,
+    [...selectedFiles]
+  );
+
+}
+
+/* PHASE 5 — one pagehide listener per MODULE LIFETIME (the
+module survives SPA navigation; the listener is a stable
+singleton, never re-registered per mount). Refresh, tab close
+and SPA navigation away all flush the pending image draft so
+nothing added/reordered/removed in the last 300ms is lost. */
+window.addEventListener(
+  "pagehide",
+  ()=>{
+    flushUploadImageDraftNow().catch(()=>{});
+  }
+);
 
 function resetUploadSession(){
 
   /* Release any lingering submission lock so that returning to the
      page (SPA re-entry) always starts from a clean, submittable
-     state. This prevents a previous failed/errored submission from
-     permanently locking the form after navigation. */
+     state. Location/photo/description are reset here. The persisted
+     text draft in draftStore is NOT deleted here — restoration
+     happens after initForm() so remounts keep unfinished work. */
   publishInProgress = false;
 
   selectedFiles = [];
@@ -69,6 +1215,48 @@ function resetUploadSession(){
   isEdit = false;
 
   editId = null;
+
+  cachedDraftUserId = null;
+
+  uploadDraftRestoring = false;
+
+  /* PHASE 4 — image draft state resets per mount so every
+  create-mode remount gets a fresh, single restore pass. */
+  uploadImageDraftRestoring = false;
+
+  uploadImageDraftRestoreInFlight = false;
+
+  uploadImageDraftRestoredThisMount = false;
+
+  /* PHASE 5 — the text draft restore must also re-arm per
+  mount. Previously uploadDraftRestoredThisSession stayed true
+  for the whole module lifetime, so after ANY SPA navigation
+  away and back, maybeRestoreUploadDraftOnce() early-returned:
+  the draft was neither restored nor were the draft listeners
+  rebound on the fresh DOM — the reported "draft failed to
+  restore" symptom. Resetting it here makes restore + listener
+  binding happen on every create-mode mount (refresh, SPA
+  return and back/forward), while edit mode keeps never
+  touching the create draft. */
+  uploadDraftRestoredThisSession = false;
+
+  if(uploadImageDraftSaveTimer){
+    clearTimeout(uploadImageDraftSaveTimer);
+    uploadImageDraftSaveTimer = null;
+  }
+
+  if(uploadDraftSaveTimer){
+    clearTimeout(uploadDraftSaveTimer);
+    uploadDraftSaveTimer = null;
+  }
+
+  /* HUFA catalogue selection is per-mount UI state. */
+  selectedHufaCatalog = null;
+  hufaCatalogYears = [];
+  hufaCatalogRows = [];
+  hufaCatalogFormWrites.clear();
+  hufaYearMode = "manual";
+  hufaCatalogManualOverride = false;
 
 }
 
@@ -94,13 +1282,265 @@ const ALLOWED_IMAGE_TYPES = [
 
 // Provinces and cities are now loaded from the shared database catalogue.
 
+/* ============================================
+PHASE 4 FINAL — LOADING STATE (body-mounted)
+============================================
+The previous in-template overlay used Tailwind arbitrary
+classes (z-[60], border-t-[#E48A2F]) that do NOT exist in the
+precompiled css/tailwind.css build, so it had no z-index and
+painted UNDER the opaque form (the .fade-in entrance transform
+also creates a containing block — the exact issue the existing
+showPublishOverlay() solves by reparenting to <body>). This
+uses the ALREADY-COMPILED hufa-publish overlay/center/card/
+spinner classes and mounts directly on <body> so it is visible
+immediately and cannot be covered. It is removed by the
+existing initForm().finally() in the page mounts. */
+let uploadBootSeq = 0;
+
+function mountUploadLoadingOverlay(){
+
+  /* Each mount supersedes any previous in-flight boot. */
+  uploadBootSeq++;
+
+  /* Idempotent: if an overlay already covers an in-flight init it
+  is KEPT (never removed/re-added — no flicker, no reveal gap). */
+  if(!document.getElementById("uploadVehicleLoading")){
+
+    const overlay = document.createElement("div");
+    overlay.id = "uploadVehicleLoading";
+    overlay.className = "hufa-publish-overlay hufa-publish-visible";
+    overlay.setAttribute("role","status");
+    overlay.setAttribute("aria-live","polite");
+    overlay.innerHTML = `
+      <div class="hufa-publish-backdrop"></div>
+      <div class="hufa-publish-center">
+        <div class="hufa-publish-card bg-white">
+          <div class="hufa-publish-spinner"></div>
+          <p class="hufa-publish-brand">HUFA</p>
+          <p class="hufa-publish-title">Loading Upload Vehicle</p>
+          <p class="hufa-publish-subtitle">Preparing your vehicle listing...</p>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+  }
+
+  /* Kill the refresh scroll jump: lock scrolling while loading and
+  snap to top, so browser scroll restoration cannot reveal or jump
+  to the bottom of the uninitialized form (requirement D). */
+  document.documentElement.style.overflow = "hidden";
+  window.scrollTo(0, 0);
+
+  return uploadBootSeq;
+
+}
+
+function unmountUploadLoadingOverlay(){
+
+  document.getElementById("uploadVehicleLoading")?.remove();
+
+  document.documentElement.style.overflow = "";
+
+}
+
+/* ============================================
+PHASE 4 FINAL — CLEAR NOW (CREATE MODE ONLY)
+============================================
+Opens a confirmation step before discarding the current
+new-vehicle draft. Uses only EXISTING store APIs:
+- clearUploadDraftRecord()        → sessionStorage text draft
+- clearUploadVehicleImageDraft()  → IndexedDB images/order/cover
+No new storage system; published vehicles, edit mode and all
+other user data are untouched (create-only button + guard). */
+
+window.openClearDraftConfirm = function(){
+
+  /* Never operable in Edit Vehicle mode. */
+  if(isEdit){ return; }
+  if(document.getElementById("clearDraftConfirm")){ return; }
+
+  const overlay = document.createElement("div");
+  overlay.id = "clearDraftConfirm";
+  overlay.className = "hufa-publish-overlay hufa-publish-visible";
+  overlay.setAttribute("role","alertdialog");
+  overlay.setAttribute("aria-live","assertive");
+  overlay.innerHTML = `
+    <div class="hufa-publish-backdrop"></div>
+    <div class="hufa-publish-center">
+      <div class="hufa-publish-card bg-white">
+        <p class="hufa-publish-title">Clear this vehicle draft?</p>
+        <p class="hufa-publish-subtitle">This will remove the information and images currently entered.</p>
+        <div style="margin-top:24px; display:flex; gap:10px; justify-content:center;">
+          <button
+            type="button"
+            id="clearDraftCancelBtn"
+            class="px-6 py-3 rounded-xl font-bold tracking-wide transition-all duration-300 text-base"
+            style="background:#FFFFFF; color:#08111F; border:1px solid #E2E8F0;"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            id="clearDraftConfirmBtn"
+            class="px-6 py-3 rounded-xl font-bold tracking-wide transition-all duration-300 text-base"
+            style="background:#E48A2F; color:#08111F;"
+          >
+            Clear Now
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  document.getElementById("clearDraftCancelBtn")
+    ?.addEventListener("click", ()=>{
+      overlay.remove();
+    });
+
+  document.getElementById("clearDraftConfirmBtn")
+    ?.addEventListener("click", ()=>{
+      overlay.remove();
+      window.confirmClearUploadDraft();
+    });
+
+};
+
+window.closeClearDraftConfirm = function(){
+  document.getElementById("clearDraftConfirm")?.remove();
+};
+
+window.confirmClearUploadDraft = async function(){
+
+  /* CREATE/NEW VEHICLE MODE ONLY — hard guard. */
+  if(isEdit){ return; }
+
+  window.closeClearDraftConfirm();
+
+  try{
+
+    /* Resolve the SAME user id both stores were keyed by,
+    BEFORE resetUploadSession() clears the cache. */
+    const draftUserId = await resolveUploadDraftUserId();
+
+    if(draftUserId){
+
+      /* 1. TEXT draft → sessionStorage (existing Phase 2 API). */
+      clearUploadDraftRecord(
+        UPLOAD_DRAFT_WORKFLOW,
+        draftUserId
+      );
+
+      /* 2. IMAGES + image order + cover → IndexedDB (existing
+      Phase 4 API; no manual IndexedDB manipulation). */
+      await clearUploadVehicleImageDraft(draftUserId);
+
+    }
+
+    /* 3. In-memory/session state: selectedFiles (order/cover),
+    debounced timers, restore guards, cached user id. */
+    resetUploadSession();
+
+    /* 4. Form back to its new-vehicle defaults. */
+    document.querySelector("form")?.reset();
+
+    selectedFiles = [];
+    selectedFeatures = [];
+    activeFeatureCategory = "";
+
+    valSet("features","");
+    valSet("featureSearch","");
+    valSet("location","");
+
+    /* Re-apply the readonly profile-derived seller value the
+    same way initForm() does (form.reset() blanks it). */
+    getUserProfile().then((sellerProfile)=>{
+
+      if(sellerProfile?.account_type){
+        valSet("seller", sellerProfile.account_type);
+      }
+
+    }).catch(()=>{});
+
+    const searchResults =
+    document.getElementById("vehicleSearchResults");
+
+    if(searchResults){
+      searchResults.innerHTML = "";
+      searchResults.classList.add("hidden");
+    }
+
+    /* 5. Dependent controls: the (now async) category toggle
+    clears + repopulates Make and clears Model/Variant; the
+    remaining toggles restore their normal defaults. */
+    toggleVehicleCategory().catch(()=>{});
+    resetModels();
+    resetVariants();
+    toggleMileageField();
+    toggleEVFields();
+    toggleMotorcycleFields();
+    toggleFinanceFields();
+    updateLocation();
+
+    const warranty = document.getElementById("warrantyIncluded");
+
+    if(warranty){
+      warranty.dispatchEvent(new Event("change"));
+    }
+
+    /* 6. Feature chips: resetUploadSession() emptied
+    FEATURE_OPTIONS, so reload it via the SAME getFeatures()
+    contract initForm() uses — without it renderFeatureChips()
+    renders with zero categories and throws on the empty group
+    (the exact source of "Could not clear the draft"). */
+    FEATURE_OPTIONS = await getFeatures();
+    renderFeatureChips();
+    initDescriptionCounter();
+    renderPreview();
+
+    toast("Vehicle draft cleared — ready for a new vehicle");
+
+    /* Small UX: after a SUCCESSFUL clear, take the user back to
+    the top of the fresh form. Runs only here — after the clear,
+    resets and success toast completed, and after the loading
+    scroll-lock has already been released (post-init). No reload,
+    no persistence/state changes. */
+    window.scrollTo({ top: 0, behavior: "smooth" });
+
+  }catch(e){
+    toast("Could not clear the draft. Please try again.");
+  }
+
+};
+
 export function UploadVehiclePage(){
+
+  /* Show the loading state FIRST, before any page work. */
+  const boot = mountUploadLoadingOverlay();
 
   resetUploadSession();
 
   setTimeout(()=>{
 
-    initForm();
+    /* A NEWER mount (authChanged-driven re-render) supersedes this
+    one: skip stale init so the full catalogue/draft/image init
+    runs only for the LATEST mount — removes duplicate init work. */
+    if(boot !== uploadBootSeq){ return; }
+
+    initForm()
+      .catch((initError)=>{
+        console.warn("Upload Vehicle init failed", initError);
+      })
+      .finally(()=>{
+        /* Only the CURRENT boot may take the overlay down — a stale
+        init finishing late must never reveal the newer mount's
+        uninitialized form. Init failure still removes the overlay
+        (never an infinite loading screen). */
+        if(boot === uploadBootSeq){
+          unmountUploadLoadingOverlay();
+        }
+      });
 
   });
 
@@ -114,7 +1554,17 @@ export function EditVehiclePage(){
   isEdit = true;
   const params = new URLSearchParams(window.location.search);
   editId = params.get("id");
-  setTimeout(()=> initForm());
+  setTimeout(()=>{
+
+    initForm()
+      .catch((initError)=>{
+        console.warn("Edit Vehicle init failed", initError);
+      })
+      .finally(()=>{
+        unmountUploadLoadingOverlay();
+      });
+
+  });
   return renderPage("Edit Vehicle");
 }
 
@@ -125,6 +1575,7 @@ function renderPage(title){
     activeNav: "upload",
     mobileTitle: title,
     content: `
+
   <div class="container-main fade-in hufa-form max-w-6xl mx-auto space-y-8">
 
     ${renderDashboardPageHeading(title === "Add Vehicle" ? "addvehicle" : "editvehicle")}
@@ -273,6 +1724,274 @@ Start typing to quickly locate a vehicle before selecting its details below.
 
 </div>
 
+<!-- =========================================================
+     HUFA CATALOGUE VARIANT SELECTION (isolated, additive)
+     ---------------------------------------------------------
+     PHASE 1 — placement only: this block sits directly below the
+     Search Vehicle field so the seller sees the catalogue as soon
+     as a search result is picked. Markup, ids, classes and every
+     JS hook are unchanged from the previous position (inside the
+     same grid, below Year).
+
+     Manufacturer → Model → Year → exact catalogue records
+     (public.hufa_vehicle_catalogue) with their own SELECT
+     buttons. Hidden until catalogue years exist for the chosen
+     Make + Model. While it is shown it REPLACES the legacy
+     #variant dropdown + manual #year input (those two stay in
+     the DOM and come straight back whenever there is no
+     catalogue year / no matching rows, or when the seller picks
+     "enter the variant manually" below — so the OTHER/manual
+     route is never lost). JS hooks: hufaCatalogSetYearMode /
+     hufaCatalogApplyFieldVisibility / hufaCatalogRenderRows.
+
+     PHASE 2 FINAL REFINEMENT — TWO PRESENTATION OPTIONS over the
+     ONE identical result set:
+       DEFAULT   : DETAILED VIEW (full catalogue table, SELECT +
+                   VARIANT pinned left, HUFA Vehicle Code last)
+       SECOND    : CARD VIEW (existing responsive cards)
+     Switching views only toggles the two containers — the query,
+     the Year workflow, the selection state and the spec population
+     logic are untouched.
+     ========================================================= -->
+<style>
+/* =========================================================
+   HUFA CATALOGUE — PHASE 2 FINAL REFINEMENT (view switcher +
+   detailed table). Scoped to .hufa-cat-* / #hufaCatalog* so no
+   other section of this page (or any other page) is affected.
+   Uses the existing HUFA palette only (#08111F / #F28C28).
+   ========================================================= */
+
+/* ---------- VIEW SWITCHER ---------- */
+.hufa-cat-switcher{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:4px;
+  border:1px solid #E2E8F0;
+  border-radius:12px;
+  background:#F8FAFC
+}
+.hufa-cat-switch-btn{
+  appearance:none;
+  border:0;
+  border-radius:9px;
+  padding:7px 14px;
+  font-size:10.5px;
+  font-weight:800;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:#475569;
+  background:transparent;
+  cursor:pointer;
+  transition:background 0.18s ease, color 0.18s ease
+}
+.hufa-cat-switch-btn:hover{
+  color:#08111F;
+  background:#EAF1FA
+}
+.hufa-cat-switch-btn.is-active{
+  background:#08111F;
+  color:#FFFFFF;
+  box-shadow:0 6px 16px rgba(8,17,31,0.25)
+}
+.hufa-cat-switch-btn:focus-visible{
+  outline:2px solid #F28C28;
+  outline-offset:2px
+}
+
+/* ---------- DETAILED VIEW (DEFAULT) ---------- */
+.hufa-cat-table-wrap{
+  width:100%;
+  max-width:100%;
+  overflow-x:auto;
+  overflow-y:auto;
+  max-height:72vh;
+  border:1px solid #E2E8F0;
+  border-radius:12px;
+  background:#FFFFFF;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior-x:contain;
+  --hufa-cat-lead-w:88px
+}
+.hufa-cat-table{
+  border-collapse:separate;
+  border-spacing:0;
+  width:max-content;
+  min-width:max(100%, 1440px);
+  table-layout:auto;
+  font-size:12px;
+  color:#0F172A
+}
+.hufa-cat-mobile-label{ display:none }
+.hufa-cat-caption{
+  caption-side:top;
+  text-align:left;
+  padding:8px 12px;
+  font-size:11px;
+  color:#64748B
+}
+.hufa-cat-table th,
+.hufa-cat-table td{
+  padding:9px 8px;
+  text-align:left;
+  vertical-align:top;
+  white-space:normal;
+  overflow-wrap:normal;
+  word-break:normal;
+  border-bottom:1px solid #EEF2F7
+}
+.hufa-cat-table thead th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:#F8FAFC;
+  color:#64748B;
+  font-size:10px;
+  font-weight:900;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  border-bottom:1px solid #E2E8F0
+}
+.hufa-cat-table tbody tr:nth-child(even) td{ background-color:#FCFDFE }
+.hufa-cat-table tbody tr:hover td{ background-color:#F5F9FF }
+/* PHASE 2.1 — SELECT + VARIANT stay pinned while the specs scroll,
+so the seller always sees WHICH variant the SELECT belongs to.
+The HUFA Vehicle Code is NOT pinned (it is the final, internal
+reference column). */
+.hufa-cat-table td.hufa-cat-col-select,
+.hufa-cat-table th.hufa-cat-col-select{
+  position:sticky;
+  left:0;
+  width:88px;
+  min-width:88px;
+  max-width:88px;
+  background-color:#FFFFFF
+}
+.hufa-cat-table td.hufa-cat-col-variant,
+.hufa-cat-table th.hufa-cat-col-variant{
+  position:sticky;
+  left:var(--hufa-cat-lead-w, 92px);
+  width:240px;
+  min-width:200px;
+  max-width:300px;
+  background-color:#FFFFFF;
+  border-right:1px solid #E2E8F0;
+  box-shadow:8px 0 10px -10px rgba(15,23,42,0.35)
+}
+.hufa-cat-table thead th.hufa-cat-col-select,
+.hufa-cat-table thead th.hufa-cat-col-variant{ z-index:3 }
+.hufa-cat-table tbody td.hufa-cat-col-select,
+.hufa-cat-table tbody td.hufa-cat-col-variant{ z-index:2 }
+/* HUFA Vehicle Code = FINAL, administrative reference column:
+never pinned, never visually dominant (the orange value itself is
+styled by .hufa-cat-code below). */
+.hufa-cat-table td.hufa-cat-col-code,
+.hufa-cat-table th.hufa-cat-col-code{
+  width:150px;
+  min-width:130px;
+  white-space:nowrap;
+  border-left:1px solid #EEF2F7
+}
+/* Selected record — same selection in BOTH views. */
+.hufa-cat-table tbody tr.hufa-cat-row-selected td{ background-color:#ECFDF5 }
+.hufa-cat-table tbody tr.hufa-cat-row-selected td.hufa-cat-col-select{
+  box-shadow:inset 3px 0 0 #10B981
+}
+.hufa-cat-table .hufa-cat-code{
+  font-weight:900;
+  color:#F28C28;
+  letter-spacing:0.04em;
+  overflow-wrap:anywhere
+}
+.hufa-cat-table .hufa-cat-empty{ color:#CBD5E1 }
+.hufa-cat-table .hufa-cat-cell-wrap{
+  white-space:normal;
+  overflow-wrap:break-word;
+  min-width:220px;
+  max-width:300px
+}
+.hufa-cat-select-btn{
+  appearance:none;
+  border:0;
+  width:100%;
+  border-radius:8px;
+  background:#08111F;
+  color:#FFFFFF;
+  padding:6px 5px;
+  font-size:9px;
+  font-weight:900;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  cursor:pointer;
+  transition:background 0.18s ease
+}
+.hufa-cat-select-btn:hover{ background:#F28C28 }
+.hufa-cat-select-btn:focus-visible{ outline:2px solid #F28C28; outline-offset:2px }
+.hufa-cat-card{
+  display:flex;
+  flex-direction:column;
+  height:100%;
+  min-width:0
+}
+@media (max-width:767px){
+  .hufa-cat-table-wrap{
+    overflow-x:auto;
+    overflow-y:visible;
+    max-height:none;
+    -webkit-overflow-scrolling:touch
+  }
+}
+/* Card view keeps its existing design — this only adds the same
+"this row is selected" affordance the detailed table rows get. */
+.hufa-cat-card.hufa-cat-row-selected{
+  border-color:#34D399;
+  box-shadow:0 0 0 2px rgba(52,211,153,0.22)
+}
+</style>
+<div id="hufaCatalogBlock" class="hidden md:col-span-2 rounded-xl border border-slate-200 bg-white p-4">
+<!-- PHASE 2.1: intermediate catalogue/year heading removed. Search Vehicle flows
+directly into count + view switcher + existing results table. The catalogue Year
+remains a DATA COLUMN in the table; the selector is hidden but retained so
+existing catalogue JS/draft logic keeps working with zero behaviour change. -->
+<select id="hufaCatalogYear" class="hidden" style="display:none" aria-hidden="true" tabindex="-1">
+<option value=""></option>
+</select>
+
+<!-- Result count (ONE shared element, never duplicated) + the view
+     switcher. The count lives OUTSIDE both view containers so it
+     stays visible when Detailed View is active, when Card View is
+     active and while switching between them. -->
+<div id="hufaCatalogMeta" class="mt-4 hidden">
+<p id="hufaCatalogCount" class="text-xs font-semibold text-slate-600"></p>
+<div class="mt-2">
+<div id="hufaCatalogViewSwitcher" class="hufa-cat-switcher" role="group" aria-label="Catalogue view">
+<button type="button" class="hufa-cat-switch-btn is-active" data-hufa-view="detailed" aria-pressed="true">Detailed View</button>
+<button type="button" class="hufa-cat-switch-btn" data-hufa-view="card" aria-pressed="false">Card View</button>
+</div>
+</div>
+</div>
+
+<!-- Messages / empty states only (loading / no rows / lookup
+     failure). Catalogue rows are rendered into the two view
+     containers below. -->
+<div id="hufaCatalogResults" class="mt-3"></div>
+
+<!-- DEFAULT VIEW: full catalogue detail table. -->
+<div id="hufaCatalogDetailedView" class="mt-3 hidden"></div>
+<!-- SECOND OPTION: existing responsive cards. -->
+<div id="hufaCatalogCardView" class="mt-3 hidden"></div>
+
+<div id="hufaCatalogSelected" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"></div>
+
+<p class="text-xs text-slate-500 mt-3">Vehicle not listed?
+<button type="button" id="hufaCatalogUseManual" class="font-semibold" style="color:#005BBF;text-decoration:underline">Enter the variant manually instead</button>
+</p>
+<!-- Persisted "manual override" flag (draft text loop). Lives in
+     the block so it exists even while the block is hidden. -->
+<input type="hidden" id="hufaCatalogManual" value="">
+<input type="hidden" id="hufaCatalogView" value="detailed">
+</div>
+
 <div class="md:col-span-2">
 
 <label class="block text-sm font-semibold text-slate-700 mb-2">
@@ -352,7 +2071,7 @@ If your exact model is unavailable, choose "Other / Not Listed".
 
 </div>
 
-<div>
+<div id="variantField">
 
 <label class="block text-sm font-semibold text-slate-700 mb-2">
 Variant
@@ -396,7 +2115,7 @@ Condition
 
 </div>
 
-<div>
+<div id="yearField">
 
 <label class="block text-sm font-semibold text-slate-700 mb-2">
 Year
@@ -413,6 +2132,8 @@ Use the model year shown on the registration certificate.
 </p>
 
 </div>
+
+
 
 <div>
 
@@ -569,6 +2290,7 @@ Electric and hybrid vehicles will automatically display additional specification
 <select id="color" class="input-light">
   <option value="">Colour</option>
 </select>
+<div id="hufaCatalogAdditionalSpecs" class="hidden md:col-span-2 grid md:grid-cols-2 gap-6"></div>
       </div>
     </div>
 
@@ -695,8 +2417,7 @@ Select the location where this vehicle is available for viewing and collection.
       <div class="grid md:grid-cols-2 gap-6">
       <input
 id="seller"
-class="input-light bg-gray-100"
-readonly
+type="hidden"
 >
 
         <select
@@ -1282,6 +3003,20 @@ class="hufa-submit w-full px-6 py-3 rounded-xl bg-[#E48A2F] text-[#08111F] font-
       ${isEdit ? "Save Changes" : "Publish Vehicle"}
     </button>
 
+${!isEdit ? `
+    <!-- PHASE 4 FINAL — Clear Now: create/new-vehicle mode only,
+    NEVER rendered in Edit Vehicle mode. Opens the existing
+    confirmation overlay (window.openClearDraftConfirm()). -->
+    <button
+      type="button"
+      id="clearDraftBtn"
+      class="w-full mt-3 px-6 py-3 rounded-xl border border-slate-200 bg-white text-slate-600 font-bold tracking-wide transition-all duration-300 hover:bg-red-50 hover:text-red-600 hover:border-red-200 active:scale-[0.98] text-base"
+      onclick="window.openClearDraftConfirm()"
+    >
+      Clear Now
+    </button>
+` : ""}
+
 <div
 id="publishOverlay"
 class="hufa-publish-overlay hidden"
@@ -1408,34 +3143,46 @@ if(!isEdit){
 
 }
 
-await fillMakes();
+/* PHASE 5 — independent catalogue loads run CONCURRENTLY:
+   each call populates its OWN select and none depends on
+   another's result, so the ~13 sequential network round-trips
+   collapse into one parallel batch. Dependent cascades
+   (province→city, make→model→variant) are NOT moved — they
+   stay sequential inside restoreUploadDraft() and the change
+   handlers, exactly as before. */
+await Promise.all([
+  fillMakes(),
+  fillProvinces(),
+  fillBodyTypes(),
+  fillFuelTypes(),
+  fillTransmissionTypes(),
+  fillDriveTypes(),
+  fillBatteryCapacities(),
+  fillBatteryRanges(),
+  fillChargingTimes(),
+  fillEngineCapacities(),
+  fillColours(),
+  fillConditions(),
+  fillCommercialCategories()
+]);
 
 resetModels();
 
-await fillProvinces();
-
-await fillBodyTypes();
-
-await fillFuelTypes();
-
-await fillTransmissionTypes();
-
-await fillDriveTypes();
-
-await fillBatteryCapacities();
-
-await fillBatteryRanges();
-
-await fillChargingTimes();
-
-await fillEngineCapacities();
-
-await fillColours();
-await fillConditions();
-
-await fillCommercialCategories();
-
 initImageUpload();
+/* HUFA catalogue: create hidden identity inputs BEFORE draft
+listeners bind, so the SAME text-draft loop captures them. */
+hufaCatalogHiddenId("hufaCatalogId");
+hufaCatalogHiddenId("hufaCatalogCode");
+hufaCatalogHiddenId("hufaCatalogVariant");
+hufaCatalogHiddenId("hufaCatalogYearValue");
+/* PHASE 5 — bind text-draft save listeners EARLY: previously
+   they bound only at the tail of initForm (inside
+   maybeRestoreUploadDraftOnce), so text typed during the long
+   catalogue/auth cascade window was never captured by the
+   draft. The dataset guard inside bindUploadDraftListeners
+   keeps the later call there a harmless no-op. */
+  bindUploadDraftListeners();
+
 
 FEATURE_OPTIONS =
 await getFeatures();
@@ -1536,6 +3283,9 @@ toggleMotorcycleFields();
 
         await fillVariants();
 
+        /* HUFA catalogue: Make change clears Year/results/selection. */
+        await hufaCatalogRefreshYears();
+
       }
     );
 
@@ -1551,6 +3301,9 @@ document
 
       await fillVariants();
 
+      /* HUFA catalogue: Model change clears Year/results/selection. */
+      await hufaCatalogRefreshYears();
+
     }
   );
 
@@ -1560,6 +3313,52 @@ document
     "change",
     toggleCustomVariant
   );
+
+document
+  .getElementById("hufaCatalogYear")
+  ?.addEventListener(
+    "change",
+    async ()=>{
+      /* HUFA catalogue: Catalogue-Year change refreshes results
+      and clears any previous SELECT. The mirrored #year input is
+      set inside hufaCatalogRefreshRows(). */
+      await hufaCatalogRefreshRows();
+    }
+  );
+
+/* HUFA catalogue escape hatch: a seller whose exact car is not in
+the table asks for the plain manual fields. The catalogue block
+steps aside, the legacy Variant dropdown + manual Year input come
+back, and the override is dropped on the next Make/Model change. */
+document
+  .getElementById("hufaCatalogUseManual")
+  ?.addEventListener("click", ()=>{
+    hufaCatalogManualOverride = true;
+    /* Persist the choice in the same text draft (see the
+    hufaCatalogManual entry in UPLOAD_TEXT_DRAFT_IDS). */
+    const flag = document.getElementById("hufaCatalogManual");
+    if(flag){ flag.value = "1"; }
+    hufaCatalogSetResultsMessage("");
+    hufaCatalogApplyFieldVisibility();
+    scheduleUploadDraftSave();
+  });
+
+/* PHASE 2 FINAL REFINEMENT — view switcher. DETAILED VIEW is the
+DEFAULT; CARD VIEW is the SECOND option. Switching only toggles the
+two already-rendered containers (same dataset, same shared count
+element, same SELECT handler), so the catalogue is never re-loaded
+and the selected record is never lost. */
+document
+  .querySelectorAll("#hufaCatalogViewSwitcher [data-hufa-view]")
+  .forEach((btn)=>{
+    btn.addEventListener("click", ()=>{
+      const view = btn.getAttribute("data-hufa-view");
+      hufaCatalogApplyView(view);
+      const viewInput = document.getElementById("hufaCatalogView");
+      if(viewInput){ viewInput.value = hufaCatalogView; }
+      scheduleUploadDraftSave();
+    });
+  });
 
 document
   .getElementById("condition")
@@ -1678,6 +3477,13 @@ if(!userData.user){
   return;
 
 }
+/* PHASE 4/5 — eager draft-user-ID resolution: populate
+   cachedDraftUserId immediately (fire-and-forget) so the
+   existing pagehide text/image flush functions always find
+   the user id already cached and can write synchronously
+   before unload. No draft store or restore logic changes. */
+  resolveUploadDraftUserId();
+
 
 /* =====================================
 UPLOAD LIMIT REMOVED
@@ -1688,20 +3494,28 @@ Unlimited vehicle uploads enabled.
 Package restrictions disabled.
 */
 
+/* PHASE 4 — the SOLE authoritative profile loader/creator
+   (js/api.js getUserProfile). A brand-new account can reach this
+   page before any dashboard visit, while the lazy profiles row
+   does not exist yet: the previous raw .single() query returned
+   no row, left the profile-derived seller field empty (so
+   seller_type was persisted as "") and never created the
+   account's profile row. Reusing the existing loader creates the
+   row here through the SAME path every other page already uses,
+   so the seller type is always prefilled and the account-type
+   keyed package limits (and the server-side featured-limit
+   trigger) resolve against a real profile. Failures degrade to
+   the previous behaviour: the seller field simply stays empty. */
 const sellerProfile =
-await supabase
-.from("profiles")
-.select("account_type")
-.eq("id", userData.user.id)
-.single();
+await getUserProfile();
 
 if(
-  sellerProfile?.data?.account_type
+  sellerProfile?.account_type
 ){
 
   valSet(
     "seller",
-    sellerProfile.data.account_type
+    sellerProfile.account_type
   );
 
 }
@@ -1709,6 +3523,19 @@ if(
 if(isEdit && editId){
   await loadVehicle(editId);
 }
+
+/* PHASE 2 — create-mode draft restore. Runs once after the
+catalogue options and profile prefill exist, so cascading
+selects (province→city, make→model→variant) restore in
+dependency order and conditional sections/features/counter
+refresh correctly. Edit mode (?id=) never restores. */
+await maybeRestoreUploadDraftOnce();
+
+/* PHASE 4 — image draft restore (create mode only). Runs
+after the text draft restore, AFTER initImageUpload() has
+initialized the image state, once per mount. Create mode
+only: edit mode (?id=) never loads create-mode images. */
+await restoreUploadImageDraft();
 
   document.getElementById("submitBtn").onclick = submitVehicle;
 }
@@ -1871,6 +3698,7 @@ valSet(
 );
 
 toggleVehicleCategory();
+hufaCatalogRenderExtraSpecs(data, true);
 
   document.getElementById("warrantyIncluded").checked =
     data.warranty_included || false;
@@ -2755,10 +4583,18 @@ engine_capacity_cc:
       ].includes(
         val("vehicleCategory")
       )
-        ? parseInt(
-            val("engineCapacityCc")
-          ) || null
-        : null,
+        ? (hufaCatalogExtraNumber("cc") ?? (parseInt(val("engineCapacityCc")) || null))
+        : hufaCatalogExtraNumber("cc"),
+
+    engine_size_l: hufaCatalogExtraNumber("engine_size_l"),
+    power_kw: hufaCatalogExtraNumber("kw"),
+    torque_nm: hufaCatalogExtraNumber("torque_nm"),
+    cylinders: hufaCatalogExtraNumber("cylinders"),
+    turbocharged: Boolean(document.getElementById("hufaSpec_turbocharged")?.checked),
+    fuel_consumption_l100: hufaCatalogExtraNumber("fuel_consumption_l100"),
+    co2_emissions_gkm: hufaCatalogExtraNumber("co2_emissions_gkm"),
+    electric_range_km: hufaCatalogExtraNumber("electric_range_km"),
+    fast_charge: Boolean(document.getElementById("hufaSpec_fast_charging")?.checked),
 
     battery_capacity_kwh:
       parseFloat(
@@ -2901,6 +4737,26 @@ setTimeout(()=>{
       : "Vehicle uploaded"
   );
 
+  /* PHASE 2 — clear ONLY the current user's Upload Vehicle
+  create draft after a successful publish. Edit mode never
+  uses the create draft; failures return before this point
+  so the draft is retained for retry. */
+  if(!isEdit){
+    resolveUploadDraftUserId().then((draftUserId)=>{
+      if(draftUserId){
+        clearUploadDraftRecord(UPLOAD_DRAFT_WORKFLOW, draftUserId);
+      }
+    }).catch(()=>{});
+  }
+
+  /* PHASE 4 — clear ONLY the current user's Upload Vehicle
+  IMAGE draft on the same successful-publish lifecycle
+  (validation/upload/network failures all return earlier and
+  keep the image draft for retry). */
+  if(!isEdit){
+    clearUploadImageDraftForCurrentUser();
+  }
+
   /* PHASE 3 — post-upload destination is DASHBOARD → INVENTORY.
      Seed the dashboard's persisted view as "inventory" so
      DashboardPage boots straight into the Inventory view
@@ -2934,12 +4790,91 @@ function initImageUpload(){
 
   renderPreview();
 
+  /* A. CLICK — existing file-picker behaviour (unchanged). */
+
   drop.onclick =
   ()=> input.click();
 
   input.onchange =
   e => handleFiles(
     e.target.files
+  );
+
+  /* PHASE 3 — B. DRAG AND DROP.
+     Dropped files enter the SAME handleFiles() pipeline used
+     by the file picker, so the existing MAX_IMAGES limit,
+     ALLOWED_IMAGE_TYPES MIME policy, validateImageFile content
+     validation, 5MB size check and duplicate detection all
+     apply identically. preventDefault() on every event stops
+     the browser from opening the file itself, and stopping
+     propagation on dragover/drop keeps the page from reacting
+     (navigating) to an unhandled drop. */
+
+  const stopDefault =
+  e => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const dragVisualOn =
+  () => drop.classList.add(
+    "hufa-dropzone--dragover"
+  );
+
+  const dragVisualOff =
+  () => drop.classList.remove(
+    "hufa-dropzone--dragover"
+  );
+
+  /* dragover fires continuously while hovering and must both
+     preventDefault (allow the drop) and re-affirm the visual. */
+
+  drop.addEventListener(
+    "dragover",
+    e => {
+      stopDefault(e);
+      dragVisualOn();
+    }
+  );
+
+  /* dragenter/dragleave only toggle the highlight — file
+     filtering happens once, on drop. dragleave also fires when
+     the pointer crosses onto a child element, but re-adding the
+     class on the next dragover makes the visual self-healing. */
+
+  drop.addEventListener(
+    "dragenter",
+    e => {
+      stopDefault(e);
+      dragVisualOn();
+    }
+  );
+
+  drop.addEventListener(
+    "dragleave",
+    e => {
+      stopDefault(e);
+      dragVisualOff();
+    }
+  );
+
+  /* dragend fires when the drag operation is cancelled
+     (e.g. Escape) with no drop occurring. */
+
+  drop.addEventListener(
+    "dragend",
+    dragVisualOff
+  );
+
+  drop.addEventListener(
+    "drop",
+    e => {
+      stopDefault(e);
+      dragVisualOff();
+      handleFiles(
+        e.dataTransfer?.files
+      );
+    }
   );
 
 }
@@ -3050,6 +4985,307 @@ async function handleFiles(files){
 
   renderPreview();
 
+  /* PHASE 4 — persist the accepted files (validated by the
+  EXISTING pipeline above; no second validation pass). This
+  covers both the file-picker and drag/drop paths, since
+  dropped files enter this same handleFiles(). */
+  scheduleUploadImageDraftSave();
+
+}
+
+/* =========================================================
+PHASE 5 — IMAGE ORDER OPERATIONS (defined ONCE at module
+scope; renderPreview only RENDERS, it never re-creates these
+handlers, so there can be no duplicate definitions or
+duplicate drag/drop listeners).
+
+Array order IS the displayed order AND the published order:
+selectedFiles[0] is always the cover. Every operation ends
+with renderPreview() + a persisted image-draft save.
+========================================================= */
+
+/* Generic reorder used by drag-and-drop: take the image at
+`from` and insert it at slot `to` (0-based within
+selectedFiles). Guards keep out-of-range drags harmless. */
+function setNewImagePosition(from, to){
+
+  if(from === to){
+    return;
+  }
+
+  if(
+    from < 0 ||
+    from >= selectedFiles.length ||
+    to < 0 ||
+    to >= selectedFiles.length
+  ){
+    return;
+  }
+
+  const [file] =
+  selectedFiles.splice(from, 1);
+
+  selectedFiles.splice(to, 0, file);
+
+  renderPreview();
+
+  /* Persist the new order (array order IS the persisted
+  order; cover/#1 follows automatically). */
+  scheduleUploadImageDraftSave();
+
+}
+
+/* Manage-Vehicle interaction concept: adjacent-swap move
+buttons (‹ / ›). Plain punctuation characters, not emoji. */
+window.moveNew = (i,dir)=>{
+
+  const target = i + dir;
+
+  if(
+    target < 0 ||
+    target >= selectedFiles.length
+  ){
+    return;
+  }
+
+  [
+    selectedFiles[target],
+    selectedFiles[i]
+  ] =
+  [
+    selectedFiles[i],
+    selectedFiles[target]
+  ];
+
+  renderPreview();
+
+  scheduleUploadImageDraftSave();
+
+};
+
+/* Same concept as Manage Vehicle's setCoverImage:
+   splice the image to the front of the array. Index 0 of
+   the publish array is the cover, so the moved image
+   becomes position 1 / Cover and the previous cover
+   drops to 2. */
+
+window.makeNewCover = i=>{
+
+  if(i <= 0 || i >= selectedFiles.length){
+    return;
+  }
+
+  const [file] =
+  selectedFiles.splice(i,1);
+
+  selectedFiles.unshift(file);
+
+  renderPreview();
+
+  scheduleUploadImageDraftSave();
+
+};
+
+/* PHASE 5 — drag-and-drop reordering between image cards.
+Bound ONCE per #preview element (the element is recreated on
+each page mount, so the dataset guard correctly re-arms per
+mount without ever stacking listeners on one element).
+
+- Cards carry draggable="true" + data-new-image-index.
+- Events are delegated on the container: exactly one
+  dragstart/dragover/drop/dragend listener set regardless of
+  how many images exist or how often they re-render.
+- stopPropagation keeps card drags completely away from the
+  separate dropzone file-drop system and away from the
+  dropzone click handler, so dragging can never open the
+  file picker.
+- Touch/mobile has no HTML5 drag: the always-visible ‹ / ›
+  move buttons and Make Cover remain the touch path. */
+function bindPreviewDragDrop(box){
+
+  if(!box || box.dataset.dndBound === "1"){
+    return;
+  }
+
+  box.dataset.dndBound = "1";
+
+  let dragFromIndex = null;
+
+  const clearDropTarget = ()=>{
+    box
+      .querySelectorAll(".hufa-image-slot--drop-target")
+      .forEach((el)=>{
+        el.classList.remove(
+          "hufa-image-slot--drop-target"
+        );
+      });
+  };
+
+  const clearDragging = ()=>{
+    box
+      .querySelectorAll(".hufa-image-slot--dragging")
+      .forEach((el)=>{
+        el.classList.remove(
+          "hufa-image-slot--dragging"
+        );
+      });
+  };
+
+  box.addEventListener(
+    "dragstart",
+    (e)=>{
+      const card =
+      e.target.closest("[data-new-image-index]");
+
+      if(!card){
+        return;
+      }
+
+      dragFromIndex =
+      Number(card.dataset.newImageIndex);
+
+      if(!Number.isInteger(dragFromIndex)){
+        dragFromIndex = null;
+        return;
+      }
+
+      e.stopPropagation();
+
+      e.dataTransfer.effectAllowed = "move";
+
+      /* setData is required for Firefox to start the drag. */
+      e.dataTransfer.setData(
+        "text/plain",
+        String(dragFromIndex)
+      );
+
+      card.classList.add(
+        "hufa-image-slot--dragging"
+      );
+
+    }
+  );
+
+  box.addEventListener(
+    "dragover",
+    (e)=>{
+      const card =
+      e.target.closest("[data-new-image-index]");
+
+      if(
+        dragFromIndex !== null &&
+        card
+      ){
+        e.preventDefault();
+
+        e.stopPropagation();
+
+        e.dataTransfer.dropEffect = "move";
+
+        clearDropTarget();
+
+        card.classList.add(
+          "hufa-image-slot--drop-target"
+        );
+
+        return;
+      }
+
+      /* PHASE 5 — GUARD: a file drag hovering over the preview
+      (not a card reorder drag) must never reach the browser's
+      default drop behaviour, which would navigate the page away
+      and destroy the draft. preventDefault here cancels the
+      default drop-navigation and hands the drop to the handler
+      below, which safely ignores it. */
+      if(
+        e.dataTransfer &&
+        Array.from(e.dataTransfer.types || []).includes("Files")
+      ){
+        e.preventDefault();
+
+        e.stopPropagation();
+      }
+
+    }
+  );
+
+  box.addEventListener(
+    "drop",
+    (e)=>{
+
+      const card =
+      e.target.closest("[data-new-image-index]");
+
+      if(
+        dragFromIndex !== null &&
+        card
+      ){
+
+        e.preventDefault();
+
+        e.stopPropagation();
+
+        clearDropTarget();
+
+        const to =
+        Number(card.dataset.newImageIndex);
+
+        if(Number.isInteger(to)){
+          setNewImagePosition(
+            dragFromIndex,
+            to
+          );
+        }
+
+        dragFromIndex = null;
+
+        return;
+
+      }
+
+      /* PHASE 5 — any other drop over the preview (OS files,
+      text, another card's cancelled drag) is swallowed: no
+      navigation, no file-picker, no state change. */
+      e.preventDefault();
+
+      e.stopPropagation();
+
+      clearDropTarget();
+
+      clearDragging();
+
+      dragFromIndex = null;
+
+    }
+  );
+
+  const endDrag = ()=>{
+
+    dragFromIndex = null;
+
+    clearDropTarget();
+
+    clearDragging();
+
+  };
+
+  box.addEventListener(
+    "dragend",
+    endDrag
+  );
+
+  box.addEventListener(
+    "dragleave",
+    (e)=>{
+      if(
+        dragFromIndex !== null &&
+        !box.contains(e.relatedTarget)
+      ){
+        clearDropTarget();
+      }
+    }
+  );
+
 }
 
 function renderPreview(){
@@ -3149,17 +5385,43 @@ function renderPreview(){
 
   }
 
+ /* PHASE 3 — each card is numbered from the CURRENT combined
+ order (existing images first, then new files), so the number
+ and the Cover label are always generated from the real
+ underlying arrays and update automatically after any
+ add/remove/replace/reorder. Position 1 is the cover:
+ no emoji, no star — a plain numeric badge plus the word
+ "Cover". Reordering reuses the Manage Vehicle interaction
+ concept: adjacent-swap move buttons (‹ / ›) plus a
+ "Make Cover" action, applied purely to selectedFiles so
+ existing stored URLs are never rewritten. The move/cover
+ handlers themselves are defined ONCE at module scope
+ (PHASE 5) — this function only renders. */
+
  existingImages.forEach((url,i)=>{
+
+  const overallIndex = i;
 
   box.innerHTML += `
     <div class="hufa-image-slot border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
 
-      <img
-        src="${url}"
-        loading="lazy"
-        class="w-full h-40 object-cover cursor-pointer"
-        onclick="openGallery(${i})"
-      >
+      <div class="relative hufa-image-frame">
+
+        <img
+          src="${url}"
+          loading="lazy"
+          class="w-full h-40 object-cover cursor-pointer"
+          onclick="openGallery(${overallIndex})"
+        >
+
+        <span class="hufa-image-position" aria-hidden="true">${overallIndex + 1}</span>
+
+        ${overallIndex === 0
+          ? `<span class="hufa-image-cover">Cover</span>`
+          : ""
+        }
+
+      </div>
 
       <div class="grid grid-cols-2 gap-2 p-2.5 bg-white border-t border-slate-100">
 
@@ -3191,21 +5453,81 @@ selectedFiles.forEach((f,i)=>{
   const url =
   URL.createObjectURL(f);
 
+  const overallIndex =
+  existingImages.length + i;
+
+  const isFirst =
+  overallIndex === 0;
+
   box.innerHTML += `
     <div class="hufa-image-slot border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
 
-      <img
-        src="${url}"
-        loading="lazy"
-        class="w-full h-40 object-cover cursor-pointer"
-        onclick="openGallery(${existingImages.length + i})"
-      >
+      <div class="relative hufa-image-frame">
 
-      <div class="grid grid-cols-2 gap-2 p-2.5 bg-white border-t border-slate-100">
+        <img
+          src="${url}"
+          loading="lazy"
+          class="w-full h-40 object-cover cursor-pointer"
+          onclick="openGallery(${overallIndex})"
+        >
+
+        <span class="hufa-image-position" aria-hidden="true">${overallIndex + 1}</span>
+
+        ${isFirst
+          ? `<span class="hufa-image-cover">Cover</span>`
+          : ""
+        }
+
+        ${i > 0
+          ? `
+            <button
+              type="button"
+              class="hufa-image-move hufa-image-move-left"
+              aria-label="Move image ${overallIndex + 1} left"
+              onclick="moveNew(${i},-1)"
+            >&#8249;</button>
+          `
+          : ""
+        }
+
+        ${i < selectedFiles.length - 1
+          ? `
+            <button
+              type="button"
+              class="hufa-image-move hufa-image-move-right"
+              aria-label="Move image ${overallIndex + 1} right"
+              onclick="moveNew(${i},1)"
+            >&#8250;</button>
+          `
+          : ""
+        }
+
+      </div>
+
+      <div class="p-2.5 bg-white border-t border-slate-100">
+
+        ${isFirst
+          ? `<span class="btn btn-sm !py-1.5 btn-clean w-full hufa-image-cover-static" aria-label="Image ${overallIndex + 1} is the cover image">Cover</span>`
+          : `
+            <button
+              type="button"
+              class="btn btn-clean btn-sm !py-1.5 w-full"
+              aria-label="Set image ${overallIndex + 1} as cover"
+              onclick="makeNewCover(${i})"
+            >
+              Make Cover
+            </button>
+          `
+        }
+
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 px-2.5 pb-2.5 bg-white">
 
         <button
           type="button"
           class="btn btn-clean btn-sm !py-1.5"
+          aria-label="Replace image ${overallIndex + 1}"
           onclick="replaceNew(${i})"
         >
           Replace
@@ -3225,6 +5547,44 @@ selectedFiles.forEach((f,i)=>{
   `;
 
 });
+
+/* PHASE 5 — tag the rendered new-image cards for the delegated
+drag-and-drop system, then bind the container listeners ONCE.
+DOM order is guaranteed: existingImages render first, then
+selectedFiles, so the selectedFiles index is the slot index
+minus the existing-image count. Doing this in JS (not in the
+template) keeps the two render loops identical and avoids any
+chance of duplicated markup handling. */
+const renderedSlots =
+box.querySelectorAll(".hufa-image-slot");
+
+renderedSlots.forEach((slot, slotOrder)=>{
+
+  const newIdx = slotOrder - existingImages.length;
+
+  if(newIdx < 0){
+    return;
+  }
+
+  slot.setAttribute("draggable", "true");
+
+  slot.setAttribute(
+    "data-new-image-index",
+    String(newIdx)
+  );
+
+  const img = slot.querySelector("img");
+
+  /* The native <img> drag (which drags the image URL) must
+  never hijack the reorder drag. */
+  if(img){
+    img.setAttribute("draggable", "false");
+  }
+
+});
+
+bindPreviewDragDrop(box);
+
 }
 
 function renderExistingImages(){
@@ -3258,6 +5618,10 @@ window.removeNew = i=>{
   selectedFiles.splice(i,1);
 
   renderPreview();
+
+  /* PHASE 4 — removed image must never come back after a
+  refresh: persist the remaining list. */
+  scheduleUploadImageDraftSave();
 
 };
 
@@ -3301,6 +5665,10 @@ window.replaceNew = i=>{
     selectedFiles[i] = file;
 
     renderPreview();
+
+    /* PHASE 4 — replacement keeps its position; persist the
+    updated list so the same position survives a refresh. */
+    scheduleUploadImageDraftSave();
 
   };
 
@@ -3351,6 +5719,11 @@ window.replaceExisting = i=>{
 
     renderPreview();
 
+    /* PHASE 5 — an existing-image replacement re-enters the
+    new selection, so the current selectedFiles order must be
+    persisted too (create mode; edit mode is a no-op guard). */
+    scheduleUploadImageDraftSave();
+
   };
 
   input.click();
@@ -3358,6 +5731,125 @@ window.replaceExisting = i=>{
 };
 
 /* ================= MAKE + MODEL ================= */
+
+/* PHASE 2 — shared cascade populators reused by both the
+change handlers and draft restoration. */
+
+async function populateModelOptions(make){
+
+  resetModels();
+  resetHufaCatalogStateOnly();
+
+  if(!make){
+    return [];
+  }
+
+  const vehicleCategory = val("vehicleCategory");
+
+  const models = await getModels(make, vehicleCategory);
+
+  const list = document.getElementById("model");
+
+  if(list){
+
+    models.forEach(model=>{
+
+      const option = document.createElement("option");
+
+      option.value = model;
+
+      option.textContent = model;
+
+      list.appendChild(option);
+
+    });
+
+  }
+
+  return models;
+
+}
+
+async function populateVariantOptions(make, model){
+
+  /* HUFA catalogue block must be reset without calling
+  resetVariants() (which calls hufaCatalogSetHidden() and the
+  hidden-id creator). resetHufaCatalogStateOnly() is safe here
+  because it only touches the catalogue block/results nodes. */
+  resetHufaCatalogStateOnly();
+
+  if(!make || !model){
+    return [];
+  }
+
+  const vehicleCategory = val("vehicleCategory");
+
+  const variants = await getVariants(make, model, vehicleCategory);
+
+  const list = document.getElementById("variant");
+
+  if(list){
+
+    variants.forEach(variant=>{
+
+      const option = document.createElement("option");
+
+      option.value = variant;
+
+      option.textContent = variant;
+
+      list.appendChild(option);
+
+    });
+
+  }
+
+  toggleCustomVariant(variants);
+
+  return variants;
+
+}
+
+async function populateCityOptions(province){
+
+  const city =
+  document.getElementById(
+    "city"
+  );
+
+  if(!city) return [];
+
+  city.innerHTML =
+  `<option value="">
+    Select City
+  </option>`;
+
+  if(!province){
+    return [];
+  }
+
+  const cities =
+  await getCities(province);
+
+  cities.forEach(name=>{
+
+    const option =
+    document.createElement("option");
+
+    option.value = name;
+
+    option.textContent = name;
+
+    city.appendChild(option);
+
+  });
+
+  city.onchange =
+  updateLocation;
+
+  return cities;
+
+}
 
 async function fillMakes(){
 
@@ -3410,6 +5902,32 @@ function resetModels(){
 
 }
 
+function resetHufaCatalogStateOnly(){
+selectedHufaCatalog = null;
+hufaCatalogRows = [];
+hufaCatalogYears = [];
+hufaCatalogRequestSeq++;
+hufaYearMode = "manual";
+hufaCatalogManualOverride = false;
+/* A fresh Make/Model (or a full reset) always returns to the
+DEFAULT view and drops both rendered presentations. */
+hufaCatalogView = "detailed";
+hufaCatalogClearViews();
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){
+selectedBox.classList.add("hidden");
+selectedBox.innerHTML = "";
+}
+const resultsBox = document.getElementById("hufaCatalogResults");
+if(resultsBox){ resultsBox.innerHTML = ""; }
+const block = document.getElementById("hufaCatalogBlock");
+if(block){ block.classList.add("hidden"); }
+const yearSelect = document.getElementById("hufaCatalogYear");
+if(yearSelect){ yearSelect.innerHTML = `<option value="">Select Catalogue Year</option>`; }
+/* Manual mode: put the legacy Variant + manual Year fields back. */
+hufaCatalogApplyFieldVisibility();
+}
+
 function resetVariants(){
 
   const list =
@@ -3440,6 +5958,1358 @@ function resetVariants(){
 
   }
 
+  /* HUFA catalogue selection never survives a variant reset.
+  Direct DOM reset only (no function call) to avoid recursion:
+  populateVariantOptions() calls resetHufaCatalogStateOnly()
+  above, so resetVariants() must not call back into it. */
+  selectedHufaCatalog = null;
+  hufaCatalogRows = [];
+  hufaCatalogRequestSeq++;
+  const hufaSelectedBox = document.getElementById("hufaCatalogSelected");
+  if(hufaSelectedBox){
+    hufaSelectedBox.classList.add("hidden");
+    hufaSelectedBox.innerHTML = "";
+  }
+  const hufaResultsBox = document.getElementById("hufaCatalogResults");
+  if(hufaResultsBox){ hufaResultsBox.innerHTML = ""; }
+  /* Both rendered presentations (and the default-view choice) go
+  with the cleared selection/rows. */
+  hufaCatalogView = "detailed";
+  hufaCatalogClearViews();
+
+}
+
+function hufaCatalogText(value){
+if(value === null || value === undefined){ return ""; }
+const text = String(value).trim();
+if(!text){ return ""; }
+if(/^null$/i.test(text) || /^undefined$/i.test(text) || /^nan$/i.test(text)){ return ""; }
+return text;
+}
+
+function hufaEscapeHtml(value){
+return hufaCatalogText(value)
+.replace(/&/g, "&amp;")
+.replace(/</g, "&lt;")
+.replace(/>/g, "&gt;")
+.replace(/"/g, "&quot;")
+.replace(/'/g, "&#39;");
+}
+
+function hufaCatalogHiddenId(id){
+let el = document.getElementById(id);
+if(el){ return el; }
+/* Hidden identity inputs live beside #variant (never in a select)
+so the SAME text-draft loop can persist them, and the generic
+setUploadDraftSelect() (options-only) can never touch them. */
+const anchor = document.getElementById("hufaCatalogBlock") || document.getElementById("variant");
+if(!anchor || !anchor.parentNode){ return null; }
+el = document.createElement("input");
+el.type = "hidden";
+el.id = id;
+anchor.parentNode.appendChild(el);
+return el;
+}
+
+function hufaCatalogSetHidden(){
+const idEl = hufaCatalogHiddenId("hufaCatalogId");
+const codeEl = hufaCatalogHiddenId("hufaCatalogCode");
+const variantEl = hufaCatalogHiddenId("hufaCatalogVariant");
+const yearEl = hufaCatalogHiddenId("hufaCatalogYearValue");
+if(idEl){ idEl.value = selectedHufaCatalog?.id || ""; }
+if(codeEl){ codeEl.value = selectedHufaCatalog?.vehicle_code || ""; }
+if(variantEl){ variantEl.value = selectedHufaCatalog?.variant || ""; }
+if(yearEl){
+yearEl.value =
+selectedHufaCatalog?.year_active === null ||
+selectedHufaCatalog?.year_active === undefined
+? ""
+: String(selectedHufaCatalog.year_active);
+}
+}
+
+/* Small null-safe toggler (same .hidden utility the rest of the
+page uses — verified present in the frozen Tailwind bundle). */
+function hufaCatalogSetFieldVisible(id, visible){
+const el = document.getElementById(id);
+if(!el){ return; }
+if(visible){
+el.classList.remove("hidden");
+}else{
+el.classList.add("hidden");
+}
+}
+
+/* Single source of truth for the Make → Model → Year → results
+layout.
+
+  catalogue mode ON  : #hufaCatalogBlock (its own Year step) is the
+                       primary UI, so the legacy #variant dropdown
+                       and the manual #year input step aside.
+  catalogue mode OFF : both legacy fields are the whole UI (today's
+                       original behaviour).
+  fallback           : as soon as there is nothing selectable in the
+                       catalogue (no rows for the chosen year) OR the
+                       seller asks for manual entry, BOTH legacy
+                       fields reappear — the manual/OTHER route is
+                       therefore never removed, only deferred. */
+function hufaCatalogApplyFieldVisibility(){
+const catalogMode = hufaYearMode === "catalog" && !hufaCatalogManualOverride;
+const yearChosen = String(document.getElementById("hufaCatalogYear")?.value || "").trim();
+const noRowsForYear = catalogMode && !!yearChosen && !hufaCatalogRows.length;
+const legacyVisible = !catalogMode || noRowsForYear;
+hufaCatalogSetFieldVisible("hufaCatalogBlock", catalogMode);
+hufaCatalogSetFieldVisible("yearField", legacyVisible);
+hufaCatalogSetFieldVisible("variantField", legacyVisible);
+}
+
+function hufaCatalogSetYearMode(mode){
+hufaYearMode = (mode === "catalog") ? "catalog" : "manual";
+hufaCatalogApplyFieldVisibility();
+}
+
+function hufaCatalogSetResultsMessage(message){
+const box = document.getElementById("hufaCatalogResults");
+if(!box){ return; }
+if(!message){ box.innerHTML = ""; return; }
+box.textContent = message;
+}
+
+function hufaCatalogDetail(label, value){
+const text = hufaEscapeHtml(value);
+if(!text){ return ""; }
+return `<div><span class="font-semibold text-slate-700">${label}:</span> ${text}</div>`;
+}
+
+/* PHASE 2 — card presentation helpers. Every helper returns ""
+for a missing value (hufaCatalogText already filters null /
+undefined / NaN / blank), so empty fields are never rendered. */
+
+/* Numeric column with a unit suffix ("999" -> "999 cc"). A value
+that already carries letters is shown verbatim (never double-unit). */
+function hufaCatalogUnit(value, unit){
+const text = hufaEscapeHtml(value);
+if(!text){ return ""; }
+return /[a-z]/i.test(text) ? text : `${text} ${unit}`;
+}
+
+/* Joins the present parts of one spec line with a light pipe. */
+function hufaCatalogJoin(parts){
+return parts.filter(Boolean).join(` <span class="text-slate-400">|</span> `);
+}
+
+/* Small rounded chip for the top-level record facts (already
+escaped by the caller — the chip never re-escapes). */
+function hufaCatalogChip(html){
+if(!html){ return ""; }
+return `<span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-600">${html}</span>`;
+}
+
+/* One "Label: value" fact for the details grid. Returns "" when
+the record has no value for that column. */
+function hufaCatalogField(label, value, nice){
+const text = nice ? hufaCatalogNiceText(value) : hufaEscapeHtml(value);
+if(!text){ return ""; }
+return `<div class="min-w-0 text-xs"><span class="text-slate-400">${label}</span> <span class="font-semibold text-slate-700 break-words">${text}</span></div>`;
+}
+
+/* PHASE 2 — ONE exact catalogue record = ONE self-contained,
+responsive card (replaces the old 17-column table that forced
+horizontal scrolling). PHASE 2.1 seller-facing hierarchy:
+1) Manufacturer / Model (identity, biggest)  2) Variant
+3) Year + Vehicle Type + Body Style chips  4) Engine / Transmission /
+Drive Type sections  5) Doors / Seats / Fuel / Introduced / Terminated
+6) its own always-visible SELECT button
+7) HUFA Vehicle Code as an ADMINISTRATIVE REFERENCE at the bottom.
+The card keeps data-hufa-row (existing selection highlight in
+hufaCatalogMarkSelected) and the button keeps data-hufa-select
+(the existing click binding), so NO selection logic changes. */
+function hufaCatalogCard(row, index){
+const code = hufaEscapeHtml(row.vehicle_code);
+const manufacturer = hufaEscapeHtml(row.manufacturer);
+const model = hufaEscapeHtml(row.model);
+const variant = hufaEscapeHtml(row.variant);
+const title = [manufacturer, model].filter(Boolean).join(" ");
+const yearText = hufaEscapeHtml(row.year_active);
+const engineLine = hufaCatalogJoin([
+hufaCatalogUnit(row.cc, "cc"),
+hufaCatalogUnit(row.kw, "kW"),
+hufaCatalogUnit(row.cylinders, "Cylinders")
+]);
+const transmissionText = hufaCatalogNiceText(row.transmission);
+const driveText = hufaCatalogNiceText(row.drive_type);
+const vehicleTypeText = hufaCatalogNiceText(row.vehicle_type);
+const bodyStyleText = hufaCatalogNiceText(row.body_style);
+const chips = [
+hufaCatalogChip(yearText ? `Year ${yearText}` : ""),
+hufaCatalogChip(vehicleTypeText ? `Type: ${vehicleTypeText}` : ""),
+hufaCatalogChip(bodyStyleText ? `Body: ${bodyStyleText}` : "")
+].filter(Boolean).join("");
+const fields = [
+hufaCatalogField("Doors:", row.doors),
+hufaCatalogField("Seats:", row.seats),
+hufaCatalogField("Fuel:", row.fuel_type, true),
+hufaCatalogField("Introduced:", row.introduced),
+hufaCatalogField("Terminated:", row.terminated)
+].filter(Boolean);
+const specSection = (label, valueHtml)=>
+`<div class="min-w-0 rounded-lg border border-slate-100 bg-slate-50 p-2">`
++ `<p class="text-[10px] font-black uppercase tracking-wider text-slate-400">${label}</p>`
++ `<p class="mt-0.5 text-sm font-bold text-slate-800 break-words">${valueHtml}</p>`
++ `</div>`;
+return `<div data-hufa-row="${index}" class="hufa-cat-card rounded-xl border border-slate-200 bg-white p-3 sm:p-4">`
+/* 1) VEHICLE IDENTITY FIRST — the seller identifies the car here. */
++ `<div class="flex flex-wrap items-start justify-between gap-2">`
++ `<div class="min-w-0">`
++ (variant
+   ? `<h4 class="text-lg font-bold text-slate-900 break-words">${variant}</h4>`
+   : (title ? `<h4 class="text-lg font-bold text-slate-900 break-words">${title}</h4>` : ""))
++ (variant && title ? `<p class="mt-0.5 text-xs font-semibold text-slate-500 break-words">${title}</p>` : "")
++ `</div>`
++ (chips ? `<div class="flex flex-wrap justify-end gap-1.5">${chips}</div>` : "")
++ `</div>`
++ (engineLine || transmissionText || driveText
+? `<div class="mt-2 grid grid-cols-2 gap-2">`
++ (engineLine ? specSection("Engine", engineLine) : "")
++ (transmissionText ? specSection("Transmission", transmissionText) : "")
++ (driveText ? specSection("Drive Type", driveText) : "")
++ `</div>`
+: "")
++ (fields.length
+? `<div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">${fields.join("")}</div>`
+: "")
++ `<div class="mt-auto flex items-center justify-between gap-2 border-t border-slate-100 pt-3">`
++ (code
+   ? `<p class="min-w-0 text-[10px] text-slate-400 break-words"><span class="font-black tracking-[0.1em]">HUFA Vehicle Code</span>: <span class="font-black text-xs text-[#F28C28]">${code}</span></p>`
+   : `<span></span>`)
++ `<button type="button" data-hufa-select="${index}" class="min-h-10 flex-none rounded-lg bg-[#08111F] px-5 py-2.5 text-xs font-black uppercase tracking-wider text-white">Select</button>`
++ `</div>`
+/* 7) PHASE 2.1 — HUFA Vehicle Code demoted to an administrative
+reference at the BOTTOM of the card (existing orange value styling). */
++ `</div>`;
+}
+
+/* =========================================================
+   PHASE 2 FINAL REFINEMENT — DETAILED VIEW (DEFAULT)
+   PHASE 2.1 — seller-facing information hierarchy.
+   ---------------------------------------------------------
+   ONE exact catalogue record = ONE table row. The detailed view
+   exposes the FULL catalogue information: every required column plus
+   any optional catalogue column that actually carries a value in
+   this result set.
+   PHASE 2.1 ordering: seller-relevant vehicle identity first
+   (Manufacturer -> Model -> Variant -> Year -> Type -> specs) and the
+   HUFA Vehicle Code LAST, because it is an internal/admin reference.
+   SELECT and the VARIANT are pinned to the left, so a seller can
+   scroll the wide specification while always seeing WHICH variant
+   the SELECT button belongs to.
+   Values come straight from the catalogue row; a missing value is a
+   neutral dash — never "null" / "undefined" / "NaN" and never an
+   invented value.
+   ========================================================= */
+
+/* Required columns — PHASE 2.1 SELLER-FIRST ORDER:
+Manufacturer, Model, Variant, Year Active, Vehicle Type, CC, kW,
+Doors, Seats, Body Style, Fuel Type, Transmission, Drive Type,
+Introduced, Terminated. The HUFA Vehicle Code is NOT in this list:
+it is appended as the FINAL column by hufaCatalogDetailedTable().
+`sticky: "pin"` pins VARIANT beside SELECT, `nice` pretty-prints
+enum text, `unit` appends a unit to a bare number, `wrap` lets long
+text wrap. */
+const HUFA_CAT_DETAILED_COLUMNS = [
+{ key: "manufacturer", label: "Manufacturer" },
+{ key: "model", label: "Model" },
+{ key: "variant", label: "Variant", wrap: true, sticky: "pin" },
+{ key: "year_active", label: "Year Active" },
+{ key: "vehicle_type", label: "Vehicle Type", nice: true },
+{ key: "cc", label: "CC", unit: "cc" },
+{ key: "kw", label: "kW", unit: "kW" },
+{ key: "doors", label: "Doors" },
+{ key: "seats", label: "Seats" },
+{ key: "body_style", label: "Body Style", nice: true },
+{ key: "fuel_type", label: "Fuel Type", nice: true },
+{ key: "transmission", label: "Transmission", nice: true },
+{ key: "drive_type", label: "Drive Type", nice: true },
+{ key: "introduced", label: "Introduced" },
+{ key: "terminated", label: "Terminated" }
+];
+
+/* PHASE 2.1 — the internal/admin reference always renders as the
+LAST column of the row (after the data-driven extras below) and is
+never pinned. The header is uppercased by the table styles, so the
+seller reads it exactly as "HUFA VEHICLE CODE". The value keeps the
+existing orange HUFA reference styling (.hufa-cat-code). */
+const HUFA_CAT_DETAILED_CODE_COLUMN = { key: "vehicle_code", label: "HUFA Vehicle Code", code: true };
+
+/* Additional EXISTING catalogue information. A column is only shown
+when at least one row in the current result set carries a value, so
+the detailed view adds real detail without padding empty columns. */
+const HUFA_CAT_DETAILED_EXTRA_COLUMNS = [
+{ key: "engine_size_l", label: "Engine Size (L)", unit: "L" },
+{ key: "cylinders", label: "Cylinders" },
+{ key: "torque_nm", label: "Torque (Nm)" },
+{ key: "turbocharged", label: "Turbocharged" },
+{ key: "fuel_consumption_l100", label: "Fuel Use (l/100km)" },
+{ key: "co2_emissions_gkm", label: "CO2 (g/km)" },
+{ key: "commercial_vehicle", label: "Commercial" },
+{ key: "commercial_category", label: "Commercial Category", nice: true },
+{ key: "cab_configuration", label: "Cab Configuration", nice: true },
+{ key: "payload_capacity_kg", label: "Payload (kg)" },
+{ key: "towing_capacity_kg", label: "Towing (kg)" },
+{ key: "is_electric", label: "Electric" },
+{ key: "is_hybrid", label: "Hybrid" },
+{ key: "is_plugin_hybrid", label: "Plug-In Hybrid" },
+{ key: "battery_capacity_kwh", label: "Battery (kWh)" },
+{ key: "battery_range_km", label: "Battery Range (km)" },
+{ key: "electric_range_km", label: "Electric Range (km)" },
+{ key: "charging_time_hours", label: "Charging Time (h)" },
+{ key: "fast_charging", label: "Fast Charging" },
+{ key: "charge_port", label: "Charge Port", nice: true },
+{ key: "charge_port_location", label: "Charge Port Location", nice: true },
+{ key: "powertrain_type", label: "Powertrain", nice: true }
+];
+
+/* Display-ready, HTML-escaped cell text for one catalogue column.
+A real boolean renders as Yes / No (a stored false is real data,
+never the word "false"); every other missing value returns "". */
+function hufaCatalogCellValue(row, column){
+const raw = row ? row[column.key] : null;
+if(typeof raw === "boolean"){ return raw ? "Yes" : "No"; }
+if(column.unit){ return hufaCatalogUnit(raw, column.unit); }
+return column.nice ? hufaCatalogNiceText(raw) : hufaEscapeHtml(raw);
+}
+
+function hufaCatalogDetailedRow(row, index, columns){
+const cells = columns.map((column)=>{
+if(column.select){
+return `<td class="hufa-cat-col-select" data-label="Select">`
++ `<span class="hufa-cat-mobile-label">Select</span>`
++ `<button type="button" data-hufa-select="${index}" class="hufa-cat-select-btn">Select</button>`
++ `</td>`;
+}
+const value = hufaCatalogCellValue(row, column);
+const classes = [];
+/* PHASE 2.1 — VARIANT is the pinned companion of SELECT. */
+if(column.sticky === "pin"){ classes.push("hufa-cat-col-variant"); }
+if(column.code){ classes.push("hufa-cat-col-code"); }
+if(column.wrap){ classes.push("hufa-cat-cell-wrap"); }
+const body = value
+? (column.code ? `<span class="hufa-cat-code">${value}</span>` : value)
+: `<span class="hufa-cat-empty" title="Not recorded">&#8211;</span>`;
+return `<td${classes.length ? ` class="${classes.join(" ")}"` : ""} data-label="${hufaEscapeHtml(column.label)}">`
++ `<span class="hufa-cat-mobile-label">${hufaEscapeHtml(column.label)}</span>${body}</td>`;
+}).join("");
+return `<tr data-hufa-row="${index}">${cells}</tr>`;
+}
+
+function hufaCatalogDetailedTable(rows){
+/* A column is only added when the CURRENT result set really carries
+it: boolean flag columns need at least one true value, every other
+column needs at least one non-empty value. Nothing is padded. */
+const extras = HUFA_CAT_DETAILED_EXTRA_COLUMNS.filter((column)=>rows.some((row)=>{
+const raw = row ? row[column.key] : null;
+if(typeof raw === "boolean"){ return raw === true; }
+return hufaCatalogCellValue(row, column) !== "";
+}));
+/* PHASE 2.1 — the HUFA Vehicle Code column is appended LAST, after
+the data-driven extras, so the internal reference can never sit in
+the middle of the seller-facing specification. */
+const columns = [{ key: "__select__", label: "Select", select: true }]
+.concat(HUFA_CAT_DETAILED_COLUMNS, extras, [HUFA_CAT_DETAILED_CODE_COLUMN]);
+const head = columns.map((column)=>{
+const classes = column.select
+? "hufa-cat-col-select"
+: (column.sticky === "pin"
+? "hufa-cat-col-variant"
+: (column.code ? "hufa-cat-col-code" : ""));
+return `<th scope="col"${classes ? ` class="${classes}"` : ""}>${hufaEscapeHtml(column.label)}</th>`;
+}).join("");
+const body = rows.map((row, index)=>hufaCatalogDetailedRow(row, index, columns)).join("");
+return `<div class="hufa-cat-table-wrap">`
++ `<table class="hufa-cat-table">`
++ `<caption class="hufa-cat-caption">Full catalogue detail &mdash; every available field is shown for each vehicle. Select stays easy to find and the HUFA Vehicle Code is included.</caption>`
++ `<thead><tr>${head}</tr></thead>`
++ `<tbody>${body}</tbody>`
++ `</table>`
++ `</div>`;
+}
+
+/* =========================================================
+   PHASE 2 FINAL REFINEMENT — VIEW STATE + SHARED HOOKS
+   Presentation only. DETAILED VIEW is the default, CARD VIEW is the
+   second option; both read the SAME hufaCatalogRows array and use
+   the SAME SELECT logic + selection state.
+   ========================================================= */
+
+/* Clears both rendered presentations and the shared count. Called
+wherever the result set is reset/replaced, so no stale view (and no
+stale count) can ever survive into a new search. */
+function hufaCatalogClearViews(){
+const meta = document.getElementById("hufaCatalogMeta");
+if(meta){ meta.classList.add("hidden"); }
+const count = document.getElementById("hufaCatalogCount");
+if(count){ count.textContent = ""; }
+const detailed = document.getElementById("hufaCatalogDetailedView");
+if(detailed){ detailed.innerHTML = ""; detailed.classList.add("hidden"); }
+const cards = document.getElementById("hufaCatalogCardView");
+if(cards){ cards.innerHTML = ""; cards.classList.add("hidden"); }
+}
+
+/* Keeps the pinned VARIANT column flush against the SELECT
+column: the lead column width is measured from the rendered table.
+A hidden container reports 0px, so this also re-runs every time the
+detailed view becomes visible. */
+function hufaCatalogAlignDetailedTable(){
+const table = document.querySelector("#hufaCatalogDetailedView .hufa-cat-table");
+if(!table){ return; }
+const lead = table.querySelector("thead .hufa-cat-col-select");
+if(!lead){ return; }
+const width = Math.round(lead.getBoundingClientRect().width);
+if(width > 0){ table.style.setProperty("--hufa-cat-lead-w", width + "px"); }
+}
+
+/* DETAILED VIEW (default) <-> CARD VIEW. Only the visibility of the
+two already-rendered containers changes: no catalogue query, no
+re-render, no selection change. */
+function hufaCatalogApplyView(view){
+hufaCatalogView = (view === "card") ? "card" : "detailed";
+const viewInput = document.getElementById("hufaCatalogView");
+if(viewInput){ viewInput.value = hufaCatalogView; }
+const detailed = document.getElementById("hufaCatalogDetailedView");
+const cards = document.getElementById("hufaCatalogCardView");
+if(detailed){ detailed.classList.toggle("hidden", hufaCatalogView !== "detailed"); }
+if(cards){ cards.classList.toggle("hidden", hufaCatalogView !== "card"); }
+document
+.querySelectorAll("#hufaCatalogViewSwitcher [data-hufa-view]")
+.forEach((btn)=>{
+const active = btn.getAttribute("data-hufa-view") === hufaCatalogView;
+btn.classList.toggle("is-active", active);
+btn.setAttribute("aria-pressed", active ? "true" : "false");
+});
+if(hufaCatalogView === "detailed"){ hufaCatalogAlignDetailedTable(); }
+}
+
+/* ONE SELECT binding for BOTH views — identical handler, identical
+row indexes into the SAME hufaCatalogRows array. */
+function hufaCatalogBindSelectButtons(){
+document
+.querySelectorAll("#hufaCatalogDetailedView [data-hufa-select], #hufaCatalogCardView [data-hufa-select]")
+.forEach((btn)=>{
+btn.addEventListener("click", ()=>{
+const index = Number(btn.getAttribute("data-hufa-select"));
+if(Number.isFinite(index)){ hufaCatalogSelectRow(index); }
+});
+});
+}
+
+/* ONE highlight routine for BOTH views: the same selected catalogue
+record is tinted in the detailed table rows and in the card list
+(the table needs the class as well, because its pinned cells carry
+their own opaque background). */
+function hufaCatalogHighlightRows(index){
+document
+.querySelectorAll("#hufaCatalogDetailedView [data-hufa-row], #hufaCatalogCardView [data-hufa-row]")
+.forEach((rowEl)=>{
+const isActive = Number(rowEl.getAttribute("data-hufa-row")) === index;
+rowEl.style.backgroundColor = isActive ? "#ecfdf5" : "";
+rowEl.classList.toggle("hufa-cat-row-selected", isActive);
+});
+}
+
+function hufaCatalogRenderRows(){
+const box = document.getElementById("hufaCatalogResults");
+if(!box){ return; }
+if(!hufaCatalogRows.length){
+/* Wording fixed by the UX spec; the legacy Variant dropdown +
+manual Year reappear beside it through
+hufaCatalogApplyFieldVisibility() below. */
+box.innerHTML = `<p class="text-xs text-slate-500">No catalogue variants found.</p>`;
+hufaCatalogClearViews();
+hufaCatalogApplyFieldVisibility();
+return;
+}
+/* ONE shared result-count element (#hufaCatalogCount) drives BOTH
+views. It lives OUTSIDE the two view containers, so the count can
+never be duplicated, can never disappear while switching views and
+is always rebuilt from the CURRENT result set. */
+const countBox = document.getElementById("hufaCatalogCount");
+if(countBox){
+const makeText = hufaCatalogText(val("make"));
+const modelText = hufaCatalogText(val("model"));
+const yearText = hufaCatalogText(document.getElementById("hufaCatalogYear")?.value || "");
+countBox.textContent =
+`${hufaCatalogRows.length} catalogue record${hufaCatalogRows.length === 1 ? "" : "s"} for `
++ [makeText, modelText, yearText].filter(Boolean).join(" ");
+}
+const meta = document.getElementById("hufaCatalogMeta");
+if(meta){ meta.classList.remove("hidden"); }
+/* BOTH views render from the SAME hufaCatalogRows array: the
+detailed table (DEFAULT) and the existing responsive cards. */
+const detailedBox = document.getElementById("hufaCatalogDetailedView");
+if(detailedBox){ detailedBox.innerHTML = hufaCatalogDetailedTable(hufaCatalogRows); }
+const cardBox = document.getElementById("hufaCatalogCardView");
+if(cardBox){ cardBox.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 items-stretch gap-3">${hufaCatalogRows.map((row, index)=>hufaCatalogCard(row, index)).join("")}</div>`; }
+/* The message area is empty while catalogue rows exist. */
+box.innerHTML = "";
+hufaCatalogBindSelectButtons();
+/* DEFAULT = DETAILED VIEW. */
+hufaCatalogApplyView(hufaCatalogView);
+/* A re-render must never lose an already-selected record. */
+const selectedIndex = selectedHufaCatalog ? hufaCatalogRows.indexOf(selectedHufaCatalog) : -1;
+if(selectedIndex >= 0){ hufaCatalogHighlightRows(selectedIndex); }
+hufaCatalogApplyFieldVisibility();
+}
+
+/* Normalized comparison key: lower-case, alphanumerics only. Used
+ONLY to choose between options that ALREADY exist in the form. */
+function hufaCatalogNorm(value){
+return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/* Finds the existing option that best matches a catalogue value.
+Never creates an option. Order:
+1. Exact value/text match (the legacy behaviour).
+2. Normalized match ("petrol" -> "Petrol", "minibus" -> "Mini Bus").
+3. Longest existing option contained in the catalogue value
+   ("Double Cab Bakkie" -> "Double Cab"). Body styles only, where
+   containment is semantically safe. */
+function hufaCatalogFindOption(select, value, allowContains){
+const text = hufaCatalogText(value);
+if(!select || !text){ return null; }
+const options = Array.from(select.options || []);
+const exact = options.find((opt)=>String(opt.value).trim() === text || String(opt.textContent || "").trim() === text);
+if(exact){ return exact; }
+const target = hufaCatalogNorm(text);
+if(!target){ return null; }
+const normalized = options.find((opt)=>hufaCatalogNorm(opt.value) === target || hufaCatalogNorm(opt.textContent) === target);
+if(normalized){ return normalized; }
+if(!allowContains){ return null; }
+let best = null;
+for(const opt of options){
+const key = hufaCatalogNorm(opt.value);
+if(!key || key.length < 3){ continue; }
+if(target.indexOf(key) === -1){ continue; }
+if(!best || key.length > best.length){ best = { length: key.length, opt: opt }; }
+}
+return best ? best.opt : null;
+}
+
+/* Keyword fallback for the columns whose form options are coarser
+than the catalogue text (the Transmission dropdown only offers
+Automatic / Manual, the catalogue says "5-speed manual", "CVT",
+"7DCT", ...). Still picks an EXISTING option only, and the exact
+catalogue string is always shown verbatim on the result card and
+kept in the hidden catalogue identity fields. */
+function hufaCatalogKeywordOption(select, value, kind){
+const text = hufaCatalogText(value).toLowerCase();
+if(!select || !text){ return null; }
+const options = Array.from(select.options || []);
+const findKey = (key)=>options.find((opt)=>hufaCatalogNorm(opt.value) === key);
+if(kind === "transmission"){
+if(/amt|automatic|auto|cvt|dct|dsg|dht|at$/.test(text)){ return findKey("automatic"); }
+if(/manual|mt$/.test(text)){ return findKey("manual"); }
+return null;
+}
+if(kind === "fuel"){
+/* hybrid first: a petrol-electric plug-in hybrid must never be
+misread as a full Electric vehicle. */
+if(text.indexOf("hybrid") !== -1){ return findKey("hybrid"); }
+if(text.indexOf("electric") !== -1){ return findKey("electric"); }
+if(text.indexOf("diesel") !== -1){ return findKey("diesel"); }
+if(text.indexOf("petrol") !== -1 || text.indexOf("gasoline") !== -1){ return findKey("petrol"); }
+return null;
+}
+return null;
+}
+
+function hufaCatalogCaptureManualEdits(){
+const protectedFields = new Map();
+for(const [id, writtenValue] of hufaCatalogFormWrites){
+const field = document.getElementById(id);
+if(!field){ hufaCatalogFormWrites.delete(id); continue; }
+const currentValue = field.type === "checkbox" ? String(field.checked) : String(field.value);
+if(currentValue !== writtenValue){
+protectedFields.set(id, currentValue);
+hufaCatalogFormWrites.delete(id);
+}
+}
+return protectedFields;
+}
+
+function hufaCatalogPrepareFormWrite(selectId, value, protectedFields, dispatchChange = true){
+const field = document.getElementById(selectId);
+if(!field || protectedFields.has(selectId)){ return null; }
+const writtenValue = hufaCatalogFormWrites.get(selectId);
+if(writtenValue !== undefined && String(field.value) !== writtenValue){
+protectedFields.set(selectId, String(field.value));
+hufaCatalogFormWrites.delete(selectId);
+return null;
+}
+const text = hufaCatalogText(value);
+if(!text){
+if(writtenValue !== undefined){
+const changed = String(field.value) !== "";
+field.value = "";
+hufaCatalogFormWrites.delete(selectId);
+if(changed && dispatchChange && field.tagName === "SELECT"){
+field.dispatchEvent(new Event("change"));
+}
+if(selectId === "variant"){ toggleCustomVariant(); }
+}
+return null;
+}
+return { field, text, writtenValue };
+}
+
+function hufaCatalogRejectFormWrite(selectId, prepared, dispatchChange = true){
+if(!prepared || prepared.writtenValue === undefined){ return false; }
+const { field } = prepared;
+const changed = String(field.value) !== "";
+field.value = "";
+hufaCatalogFormWrites.delete(selectId);
+if(changed && dispatchChange && field.tagName === "SELECT"){
+field.dispatchEvent(new Event("change"));
+}
+if(selectId === "variant"){ toggleCustomVariant(); }
+return false;
+}
+
+function hufaCatalogCommitFormWrite(selectId, prepared){
+hufaCatalogFormWrites.set(selectId, String(prepared.field.value));
+return true;
+}
+
+function hufaCatalogClearTrackedField(selectId, protectedFields, dispatchChange = true){
+const field = document.getElementById(selectId);
+if(!field || protectedFields.has(selectId)){ return false; }
+const writtenValue = hufaCatalogFormWrites.get(selectId);
+if(writtenValue === undefined || String(field.value) !== writtenValue){
+hufaCatalogFormWrites.delete(selectId);
+return false;
+}
+const changed = String(field.value) !== "";
+field.value = "";
+hufaCatalogFormWrites.delete(selectId);
+if(changed && dispatchChange && field.tagName === "SELECT"){
+field.dispatchEvent(new Event("change"));
+}
+return true;
+}
+
+function hufaCatalogSetSelectIfOption(selectId, value, kind, protectedFields, dispatchChange = true, allowCatalogueOption = false){
+const prepared = hufaCatalogPrepareFormWrite(selectId, value, protectedFields, dispatchChange);
+if(!prepared){ return false; }
+const { field: select, text } = prepared;
+let match =
+hufaCatalogFindOption(select, text, kind === "body") ||
+hufaCatalogKeywordOption(select, text, kind);
+/* Variant options can be added from this actual selected record.
+Other fields only use options already defined by the form. */
+if(!match && allowCatalogueOption){
+match = document.createElement("option");
+match.value = text;
+match.textContent = text + " (Catalogue)";
+select.appendChild(match);
+}
+if(!match){ return hufaCatalogRejectFormWrite(selectId, prepared, dispatchChange); }
+const changed = String(select.value) !== String(match.value);
+select.value = match.value;
+if(changed && dispatchChange){ select.dispatchEvent(new Event("change")); }
+hufaCatalogCommitFormWrite(selectId, prepared);
+return true;
+}
+
+/* Value-only columns (doors/seats) are set only when the exact
+option exists, so a catalogue number can never blank the field. */
+function hufaCatalogSetValueIfOption(selectId, value, protectedFields){
+const prepared = hufaCatalogPrepareFormWrite(selectId, value, protectedFields);
+if(!prepared){ return false; }
+const { field: select, text } = prepared;
+const number = Number(text);
+if(!Number.isInteger(number) || number < 0){
+return hufaCatalogRejectFormWrite(selectId, prepared);
+}
+const match = Array.from(select.options || []).find((opt)=>String(opt.value).trim() === String(number));
+if(!match){ return hufaCatalogRejectFormWrite(selectId, prepared); }
+const changed = String(select.value) !== String(match.value);
+select.value = match.value;
+if(changed){ select.dispatchEvent(new Event("change")); }
+hufaCatalogCommitFormWrite(selectId, prepared);
+return true;
+}
+
+function hufaCatalogSetIntegerInputIfValid(inputId, value, protectedFields, min, max){
+const prepared = hufaCatalogPrepareFormWrite(inputId, value, protectedFields);
+if(!prepared){ return false; }
+const number = Number(prepared.text);
+if(!Number.isInteger(number) || number < min || number > max){
+return hufaCatalogRejectFormWrite(inputId, prepared);
+}
+prepared.field.value = String(number);
+hufaCatalogCommitFormWrite(inputId, prepared);
+return true;
+}
+
+/* Nearest-number option matching for the catalogue's numeric
+columns (cc, battery capacity/range, charging time, payload,
+towing). Picks the CLOSEST option that already exists and only
+accepts it when the distance is inside the given tolerance, so a
+catalogue figure is rounded to the form's own scale (999cc ->
+"1000 cc", 1.5h -> "1.5") instead of ever inventing an option.
+A failed match leaves the seller's value completely untouched. */
+function hufaCatalogSetNumberIfOption(selectId, value, ratioTolerance, absTolerance, protectedFields){
+const prepared = hufaCatalogPrepareFormWrite(selectId, value, protectedFields);
+if(!prepared){ return false; }
+const { field: select, text } = prepared;
+if(!select.options || !select.options.length){ return hufaCatalogRejectFormWrite(selectId, prepared); }
+const numericText = text.replace(/[^0-9.]/g, "");
+const target = Number(numericText);
+if(!/[0-9]/.test(numericText) || !Number.isFinite(target) || target < 0){ return hufaCatalogRejectFormWrite(selectId, prepared); }
+let best = null;
+for(const opt of select.options){
+const raw = String(opt.value !== undefined && opt.value !== null ? opt.value : (opt.textContent || ""));
+if(!/[0-9]/.test(raw)){ continue; }
+const num = Number(raw.replace(/[^0-9.]/g, ""));
+if(!Number.isFinite(num)){ continue; }
+const diff = Math.abs(num - target);
+if(!best || diff < best.diff){ best = { diff: diff, opt: opt }; }
+}
+if(!best){ return hufaCatalogRejectFormWrite(selectId, prepared); }
+const allowed = target === 0
+? 0
+: Math.max(Number(absTolerance) || 0, target * (Number(ratioTolerance) || 0));
+if(best.diff > allowed){ return hufaCatalogRejectFormWrite(selectId, prepared); }
+const changed = String(select.value) !== String(best.opt.value);
+select.value = best.opt.value;
+hufaCatalogCommitFormWrite(selectId, prepared);
+if(changed){ select.dispatchEvent(new Event("change")); }
+return true;
+}
+
+/* Human readable label for catalogue enums stored as snake_case /
+kebab-case ("passenger_car" -> "Passenger Car"). Pretty-printed
+first, then HTML-escaped so it is safe inside the table cell. */
+function hufaCatalogNiceText(value){
+const text = hufaCatalogText(value);
+if(!text){ return ""; }
+const pretty = text
+.replace(/[_\-]+/g, " ")
+.replace(/\s+/g, " ")
+.trim()
+.replace(/\b[a-z]/g, (ch)=>ch.toUpperCase());
+return hufaEscapeHtml(pretty);
+}
+
+function hufaCatalogApplyCategoryVisibility(category){
+const motorcycleCategories = ["Motorcycle", "ATV", "Quad Bike", "Side-by-Side"];
+const isMotorcycle = motorcycleCategories.includes(category);
+document.getElementById("commercialFields")?.classList.toggle("hidden", category !== "Commercial Vehicle");
+document.getElementById("motorcycleFields")?.classList.toggle("hidden", !isMotorcycle);
+document.getElementById("bodyField")?.classList.toggle("hidden", isMotorcycle);
+document.getElementById("doorsField")?.classList.toggle("hidden", isMotorcycle);
+document.getElementById("seatsField")?.classList.toggle("hidden", isMotorcycle);
+}
+
+const HUFA_EXTRA_SPEC_FIELDS = [
+  ["engine_size_l", "Engine Size (L)", "engine_size_l"],
+  ["kw", "Power Output (kW)", "power_kw"],
+  ["torque_nm", "Torque (Nm)", "torque_nm"],
+  ["cylinders", "Cylinders", "cylinders"],
+  ["turbocharged", "Turbocharged", "turbocharged"],
+  ["fuel_consumption_l100", "Fuel Consumption (L/100 km)", "fuel_consumption_l100"],
+  ["co2_emissions_gkm", "CO₂ Emissions (g/km)", "co2_emissions_gkm"],
+  ["electric_range_km", "Electric Range (km)", "electric_range_km"],
+  ["fast_charging", "Fast Charging", "fast_charge"]
+];
+
+function hufaCatalogRenderExtraSpecs(record, isSavedRecord = false, protectedFields = new Map()){
+  const container = document.getElementById("hufaCatalogAdditionalSpecs");
+  if(!container){ return; }
+  const existingFields = Array.from(container.querySelectorAll("input[id^='hufaSpec_']"));
+  for(const field of existingFields){
+    if(protectedFields.has(field.id) || hufaCatalogFormWrites.has(field.id)) continue;
+    const id = field.id.slice("hufaSpec_".length);
+    const catalogKey = id === "cc" ? "cc" : id;
+    const dbKey = id === "cc" ? "engine_capacity_cc" : HUFA_EXTRA_SPEC_FIELDS.find(([key]) => key === id)?.[2];
+    const sourceValue = isSavedRecord ? record?.[dbKey] : record?.[catalogKey];
+    const hasSourceValue = field.type === "checkbox" ? sourceValue === true : hufaCatalogHasValue(sourceValue);
+    const currentValue = field.type === "checkbox" ? String(field.checked) : String(field.value);
+    if(!hasSourceValue && currentValue !== "" && currentValue !== "false") protectedFields.set(field.id, currentValue);
+  }
+  for(const booleanId of ["turbocharged", "fast_charging"]){
+    const existing = document.getElementById(`hufaSpec_${booleanId}`);
+    if(existing?.checked && record?.[booleanId] !== true){
+      protectedFields.set(`hufaSpec_${booleanId}`, "true");
+    }
+  }
+  const electricVehicle = /electric|hybrid/i.test(String(record?.fuel_type || ""));
+  const specs = [];
+  const ccValue = isSavedRecord ? record?.engine_capacity_cc : record?.cc;
+  if(hufaCatalogHasValue(ccValue)){
+    specs.push({ id: "cc", label: "Engine Capacity (cc)", value: ccValue, db: "engine_capacity_cc" });
+  }
+  for(const [key, label, db] of HUFA_EXTRA_SPEC_FIELDS){
+    if(["electric_range_km", "fast_charging"].includes(key) && !electricVehicle) continue;
+    const value = record?.[isSavedRecord ? db : key];
+    const valid = key === "turbocharged" || key === "fast_charging"
+      ? value === true || (isSavedRecord && typeof value === "boolean")
+      : hufaCatalogHasValue(value);
+    if(valid){ specs.push({ id: key, label, value, db, boolean: key === "turbocharged" || key === "fast_charging" }); }
+  }
+  for(const [fieldId, value] of protectedFields){
+    if(!fieldId.startsWith("hufaSpec_") || value === "") continue;
+    const id = fieldId.slice("hufaSpec_".length);
+    if(specs.some(spec => spec.id === id)) continue;
+    const definition = id === "cc"
+      ? { label: "Engine Capacity (cc)", db: "engine_capacity_cc" }
+      : HUFA_EXTRA_SPEC_FIELDS.find(([key]) => key === id)
+        ? { label: HUFA_EXTRA_SPEC_FIELDS.find(([key]) => key === id)[1], db: HUFA_EXTRA_SPEC_FIELDS.find(([key]) => key === id)[2] }
+        : null;
+    if(definition){
+      const boolean = id === "turbocharged" || id === "fast_charging";
+      specs.push({ id, label: definition.label, db: definition.db, boolean, value: boolean ? value === "true" : value });
+    }
+  }
+  container.innerHTML = "";
+  for(const spec of specs){
+    const fieldId = `hufaSpec_${spec.id}`;
+    const manuallySet = protectedFields.has(fieldId);
+    const value = manuallySet ? protectedFields.get(fieldId) : spec.value;
+    const wrapper = document.createElement("div");
+    if(spec.boolean){
+      wrapper.innerHTML = `<label class="flex items-center gap-2 text-sm font-semibold"><input id="${fieldId}" type="checkbox" class="h-4 w-4"> ${hufaEscapeHtml(spec.label)}</label>`;
+      wrapper.querySelector("input").checked = manuallySet ? value === "true" : value === true;
+    }else{
+      wrapper.innerHTML = `<label class="block mb-1 text-sm font-semibold" for="${fieldId}">${hufaEscapeHtml(spec.label)}</label><input id="${fieldId}" type="number" min="0" step="any" class="input-light" value="">`;
+      wrapper.querySelector("input").value = String(value ?? "");
+    }
+    container.appendChild(wrapper);
+    const field = wrapper.querySelector("input");
+    field.addEventListener(field.type === "checkbox" ? "change" : "input", scheduleUploadDraftSave);
+    if(!manuallySet && !isSavedRecord){ hufaCatalogFormWrites.set(fieldId, field.type === "checkbox" ? String(field.checked) : String(field.value)); }
+  }
+  container.classList.toggle("hidden", specs.length === 0);
+}
+
+function hufaCatalogHasValue(value){
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+}
+
+function hufaCatalogExtraNumber(id){
+  const field = document.getElementById(`hufaSpec_${id}`);
+  if(!field || field.value === "") return null;
+  const value = Number(field.value);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function hufaCatalogRestoreProtectedFields(protectedFields){
+for(const [id, value] of protectedFields){
+const field = document.getElementById(id);
+if(!field){ continue; }
+if(field.type === "checkbox"){
+field.checked = value === "true";
+continue;
+}
+if(field.tagName === "SELECT"){
+const optionExists = Array.from(field.options || []).some((option)=>String(option.value) === value);
+if(optionExists){ field.value = value; }
+}else{
+field.value = value;
+}
+}
+}
+
+function hufaCatalogApplyToForm(row){
+if(!row){ return; }
+const protectedFields = hufaCatalogCaptureManualEdits();
+hufaCatalogRenderExtraSpecs(row, false, protectedFields);
+const motorcycleCategories = ["Motorcycle", "ATV", "Quad Bike", "Side-by-Side"];
+const batteryFieldIds = ["batteryCapacity", "batteryRange", "chargingTime"];
+const electricFuel = /electric|hybrid/.test(hufaCatalogText(row.fuel_type).toLowerCase());
+if(!electricFuel){
+for(const id of batteryFieldIds){
+const field = document.getElementById(id);
+if(field && String(field.value) && !hufaCatalogFormWrites.has(id)){
+protectedFields.set(id, String(field.value));
+}
+}
+}
+/* Set a category only when the catalogue value exactly resolves to an
+existing broad form option. Avoid its change listener, which clears the
+active catalogue selection and reloads the make/model cascade. */
+hufaCatalogSetSelectIfOption("vehicleCategory", row.vehicle_type, "option", protectedFields, false);
+const selectedCategory = val("vehicleCategory");
+hufaCatalogApplyCategoryVisibility(selectedCategory);
+/* Search Vehicle already establishes this identity. Match the actual
+existing Make/Model options without firing their reset/reload events. */
+hufaCatalogSetSelectIfOption("make", row.manufacturer, "option", protectedFields, false);
+hufaCatalogSetSelectIfOption("model", row.model, "option", protectedFields, false);
+/* Match the upload form's integer year validation range. */
+hufaCatalogSetIntegerInputIfValid("year", row.year_active, protectedFields, 1980, new Date().getFullYear());
+hufaCatalogSetSelectIfOption("variant", row.variant, "option", protectedFields, false, true);
+toggleCustomVariant();
+hufaCatalogSetSelectIfOption("body", motorcycleCategories.includes(selectedCategory) ? null : row.body_style, "body", protectedFields);
+hufaCatalogSetSelectIfOption("fuel", row.fuel_type, "fuel", protectedFields);
+hufaCatalogSetSelectIfOption("trans", row.transmission, "transmission", protectedFields);
+hufaCatalogSetSelectIfOption("drive", row.drive_type, "drive", protectedFields);
+hufaCatalogSetValueIfOption("doors", motorcycleCategories.includes(selectedCategory) ? null : row.doors, protectedFields);
+hufaCatalogSetValueIfOption("seats", motorcycleCategories.includes(selectedCategory) ? null : row.seats, protectedFields);
+const fuelNowBeforeEvToggle = val("fuel").toLowerCase();
+const selectedFuelIsElectric = /electric|hybrid/.test(fuelNowBeforeEvToggle);
+if(!selectedFuelIsElectric){
+for(const id of batteryFieldIds){
+hufaCatalogClearTrackedField(id, protectedFields, false);
+}
+}
+toggleEVFields();
+/* Commercial cascade FIRST: setting commercialCategory dispatches
+its change listener (updateCabConfigurations), which rebuilds the
+cab list and then the payload/towing option lists — and rebuilding
+CLEARS those selections. So category -> cab -> payload/towing must
+run in exactly this order, otherwise the numbers below would be
+matched against (and then wiped by) the previous option set. */
+if(selectedCategory === "Commercial Vehicle"){
+const commercialDependents = ["cabConfiguration", "payloadCapacityKg", "towingCapacityKg"];
+const previousCommercialCategory = val("commercialCategory");
+const categoryMatch = hufaCatalogFindOption(document.getElementById("commercialCategory"), row.commercial_category, false);
+const categoryWouldChange = categoryMatch
+? String(categoryMatch.value) !== String(previousCommercialCategory)
+: (!hufaCatalogText(row.commercial_category) && hufaCatalogFormWrites.has("commercialCategory"));
+const previousCabConfiguration = val("cabConfiguration");
+const cabMatch = hufaCatalogFindOption(document.getElementById("cabConfiguration"), row.cab_configuration, false);
+const cabWouldChange = !!cabMatch && String(cabMatch.value) !== String(previousCabConfiguration);
+const commercialCascadeWouldReset = categoryWouldChange || cabWouldChange;
+if(commercialCascadeWouldReset){
+/* Preserve existing manual commercial values if changing either
+parent select would rebuild and erase their option lists. */
+for(const id of commercialDependents){
+const field = document.getElementById(id);
+if(field && String(field.value) && !hufaCatalogFormWrites.has(id)){
+protectedFields.set(id, String(field.value));
+}
+}
+}
+const hasManuallyChangedCommercialDependent = commercialDependents.some((id)=>protectedFields.has(id));
+const mayChangeCommercialCategory = !(categoryWouldChange && hasManuallyChangedCommercialDependent);
+if(!mayChangeCommercialCategory){
+/* A different category would invalidate this manually edited
+commercial specification group, so keep the complete group intact. */
+for(const id of commercialDependents){
+protectedFields.set(id, String(val(id)));
+}
+}
+let commercialCategoryWasChanged = false;
+if(mayChangeCommercialCategory){
+hufaCatalogSetSelectIfOption("commercialCategory", row.commercial_category, "option", protectedFields);
+commercialCategoryWasChanged = String(val("commercialCategory")) !== String(previousCommercialCategory);
+}
+if(commercialCategoryWasChanged){
+/* The category cascade rebuilt these options. Clear the previous
+catalogue-derived values before applying this record's values. */
+for(const id of commercialDependents){
+hufaCatalogFormWrites.delete(id);
+const field = document.getElementById(id);
+if(field && !protectedFields.has(id)){ field.value = ""; }
+}
+}
+if(!hasManuallyChangedCommercialDependent){
+hufaCatalogSetSelectIfOption("cabConfiguration", row.cab_configuration, "option", protectedFields);
+if(String(val("cabConfiguration")) !== String(previousCabConfiguration)){
+/* Changing the cab rebuilds payload/towing choices; discard the
+prior catalogue ownership before applying this row's numbers. */
+for(const id of ["payloadCapacityKg", "towingCapacityKg"]){
+hufaCatalogFormWrites.delete(id);
+const field = document.getElementById(id);
+if(field){ field.value = ""; }
+}
+}
+}
+}else{
+for(const id of ["commercialCategory", "cabConfiguration", "payloadCapacityKg", "towingCapacityKg"]){
+hufaCatalogClearTrackedField(id, protectedFields, false);
+}
+}
+/* Numeric columns: rounded to the closest option the form already
+has (and only when it is within tolerance). Tolerance = the larger
+of 5% and the absolute floor, which covers every engine size the
+form can express (999cc -> "1000 cc", 1462cc -> "1500 cc",
+2393cc -> "2300 cc"); an outlier like 2755cc (nothing within 5%)
+stays untouched instead of being rounded ~9% the wrong way. kW has
+no input field in this form, so it stays display-only on the
+result table. Payload/towing are only present on commercial rows;
+passenger rows leave those fields exactly as the seller had them. */
+hufaCatalogSetNumberIfOption("engineCapacityCc", motorcycleCategories.includes(selectedCategory) ? row.cc : null, 0.05, 50, protectedFields);
+hufaCatalogSetNumberIfOption("batteryCapacity", selectedFuelIsElectric ? row.battery_capacity_kwh : null, 0.05, 2, protectedFields);
+hufaCatalogSetNumberIfOption("batteryRange", selectedFuelIsElectric ? row.battery_range_km : null, 0.05, 25, protectedFields);
+hufaCatalogSetNumberIfOption("chargingTime", selectedFuelIsElectric ? row.charging_time_hours : null, 0.1, 0.25, protectedFields);
+hufaCatalogSetNumberIfOption("payloadCapacityKg", selectedCategory === "Commercial Vehicle" ? row.payload_capacity_kg : null, 0.05, 50, protectedFields);
+hufaCatalogSetNumberIfOption("towingCapacityKg", selectedCategory === "Commercial Vehicle" ? row.towing_capacity_kg : null, 0.05, 50, protectedFields);
+/* The existing fuel/category visibility rules can clear dependent
+controls; restore fields that were manually changed after selection. */
+hufaCatalogRestoreProtectedFields(protectedFields);
+scheduleUploadDraftSave();
+}
+
+function hufaCatalogMarkSelected(index, applyToForm){
+const row = hufaCatalogRows[index];
+if(!row){ return; }
+selectedHufaCatalog = row;
+hufaCatalogSetHidden();
+if(applyToForm !== false){
+hufaCatalogApplyToForm(row);
+}
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){
+const code = hufaCatalogText(row.vehicle_code) || "-";
+const variantName = hufaCatalogText(row.variant) || "Selected variant";
+const yearText = hufaCatalogText(row.year_active);
+selectedBox.classList.remove("hidden");
+selectedBox.innerHTML = `<span>Selected: ${hufaEscapeHtml(variantName)} - HUFA ${hufaEscapeHtml(code)}${yearText ? ` - ${hufaEscapeHtml(yearText)}` : ""}</span> <button type="button" id="hufaCatalogDeselect" class="ml-3 inline-flex min-h-8 items-center rounded-lg border border-emerald-300 bg-white px-3 py-1 font-semibold text-emerald-900 hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600" aria-label="Remove selected catalogue vehicle">Remove selection</button>`;
+document.getElementById("hufaCatalogDeselect")?.addEventListener("click", hufaCatalogDeselectSelection);
+}
+/* ONE highlight routine for BOTH views — the same catalogue record
+is tinted in the detailed table and in the card list, so switching
+views always shows the SAME selection. */
+hufaCatalogHighlightRows(index);
+scheduleUploadDraftSave();
+}
+
+function hufaCatalogSelectRow(index){
+hufaCatalogMarkSelected(index, true);
+}
+
+function hufaCatalogDeselectSelection(){
+if(!selectedHufaCatalog){ return; }
+const protectedFields = hufaCatalogCaptureManualEdits();
+const extraContainer = document.getElementById("hufaCatalogAdditionalSpecs");
+for(const field of Array.from(extraContainer?.querySelectorAll("input[id^='hufaSpec_']") || [])){
+  const id = field.id;
+  const current = field.type === "checkbox" ? String(field.checked) : String(field.value);
+  if(!hufaCatalogFormWrites.has(id) && current !== "" && current !== "false") protectedFields.set(id, current);
+}
+for(const id of ["year", "variant", "body", "fuel", "trans", "drive", "doors", "seats", "engineCapacityCc", "batteryCapacity", "batteryRange", "chargingTime", "commercialCategory", "cabConfiguration", "payloadCapacityKg", "towingCapacityKg"]){
+  hufaCatalogClearTrackedField(id, protectedFields, false);
+}
+for(const field of Array.from(extraContainer?.querySelectorAll("input[id^='hufaSpec_']") || [])){
+  const id = field.id;
+  if(protectedFields.has(id)){
+    hufaCatalogFormWrites.delete(id);
+    continue;
+  }
+  hufaCatalogFormWrites.delete(id);
+  field.parentElement?.remove();
+}
+if(extraContainer){ extraContainer.classList.toggle("hidden", !extraContainer.children.length); }
+selectedHufaCatalog = null;
+hufaCatalogSetHidden();
+hufaCatalogHighlightRows(-1);
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){ selectedBox.classList.add("hidden"); selectedBox.innerHTML = ""; }
+scheduleUploadDraftSave();
+}
+
+/* =========================================================
+PHASE 2 (HUFA VEHICLE SEARCH) - SEARCH IDENTITY -> DIRECT TABLE LOAD
+---------------------------------------------------------
+Clicking a Search Vehicle suggestion loads ALL catalogue
+records for that Make + Model straight into the EXISTING
+detailed results table. Reuses ONLY the existing catalogue
+getters (getHufaCatalogYears / getHufaCatalogVariants) and
+the existing render path (hufaCatalogRows +
+hufaCatalogRenderRows + hufaCatalogApplyFieldVisibility).
+No new table, component, columns, styling, SELECT logic or
+catalog.js change. PHASE 2.1: the visible Year selector was removed;
+its element is hidden but retained for existing JS/draft logic. The
+table renders WITHOUT requiring a Year choice. Year filtering (Phase 3) is untouched
+- picking a Year afterwards still runs the existing
+hufaCatalogRefreshRows() path. */
+async function hufaSearchDirectLoadCatalogue(make, model, knownYears){
+if(isEdit){ return; }
+const cleanMake = String(make ?? "").trim();
+const cleanModel = String(model ?? "").trim();
+if(!cleanMake || !cleanModel || cleanModel === "__OTHER_MODEL__"){
+await hufaCatalogRefreshYears();
+return;
+}
+/* New Make/Model search re-enables the catalogue path (same
+rule as hufaCatalogRefreshYears). */
+hufaCatalogManualOverride = false;
+const manualFlag = document.getElementById("hufaCatalogManual");
+if(manualFlag){ manualFlag.value = ""; }
+selectedHufaCatalog = null;
+hufaCatalogRows = [];
+hufaCatalogSetHidden();
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){ selectedBox.classList.add("hidden"); selectedBox.innerHTML = ""; }
+const yearSelect = document.getElementById("hufaCatalogYear");
+if(yearSelect){ yearSelect.innerHTML = `<option value="">Loading years...</option>`; }
+const requestId = ++hufaCatalogRequestSeq;
+let years = Array.isArray(knownYears) ? knownYears : [];
+if(!Array.isArray(knownYears)){
+try{ years = await getHufaCatalogYears(cleanMake, cleanModel); }catch(e){ years = []; }
+}
+if(requestId !== hufaCatalogRequestSeq){ return; }
+hufaCatalogYears = Array.isArray(years) ? years : [];
+if(!hufaCatalogYears.length){
+hufaCatalogSetYearMode("manual");
+hufaCatalogSetResultsMessage("");
+return;
+}
+/* Year selector stays intact for reference (Phase 3 owns it),
+but NO year is pre-selected: the table below loads directly. */
+hufaCatalogSetYearMode("catalog");
+if(yearSelect){
+yearSelect.innerHTML = `<option value="">Select Catalogue Year</option>` + hufaCatalogYears.map((year)=>`<option value="${year}">${year}</option>`).join("");
+}
+hufaCatalogSetResultsMessage("Loading catalogue variants...");
+let combined = [];
+try{
+for(const year of hufaCatalogYears){
+if(requestId !== hufaCatalogRequestSeq){ return; }
+let rowsForYear = [];
+try{ rowsForYear = await getHufaCatalogVariants(cleanMake, cleanModel, year); }catch(e){ rowsForYear = []; }
+if(Array.isArray(rowsForYear) && rowsForYear.length){
+combined.push(...rowsForYear);
+}
+}
+}catch(e){ combined = []; }
+if(requestId !== hufaCatalogRequestSeq){ return; }
+/* Newest year first, then variant A-Z (same ordering the
+per-year path uses, extended across years). */
+combined.sort((a, b)=>{
+const yearA = Number(a?.year_active);
+const yearB = Number(b?.year_active);
+const safeA = Number.isFinite(yearA) ? yearA : -Infinity;
+const safeB = Number.isFinite(yearB) ? yearB : -Infinity;
+if(safeB !== safeA){ return safeB - safeA; }
+return String(a?.variant || "").localeCompare(String(b?.variant || ""));
+});
+hufaCatalogRows = combined;
+if(!hufaCatalogRows.length){
+hufaCatalogRenderRows();
+return;
+}
+hufaCatalogRenderRows();
+}
+
+async function hufaCatalogRefreshYears(){
+/* Create mode only: the Edit Vehicle route keeps its legacy form
+untouched (same rule the text/image drafts already follow). */
+if(isEdit){ return; }
+/* A new Make/Model search always re-enables the catalogue path —
+"enter the variant manually instead" is per-selection only. The
+persisted flag is cleared with it; hufaCatalogRestoreFromDraft
+captures the draft value before calling this and re-applies it. */
+hufaCatalogManualOverride = false;
+const manualFlag = document.getElementById("hufaCatalogManual");
+if(manualFlag){ manualFlag.value = ""; }
+const make = val("make").trim();
+const model = val("model").trim();
+const yearSelect = document.getElementById("hufaCatalogYear");
+selectedHufaCatalog = null;
+hufaCatalogRows = [];
+hufaCatalogSetHidden();
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){ selectedBox.classList.add("hidden"); selectedBox.innerHTML = ""; }
+if(yearSelect){ yearSelect.innerHTML = `<option value="">Select Catalogue Year</option>`; }
+if(!make || !model || model === "__OTHER_MODEL__"){
+hufaCatalogSetYearMode("manual");
+hufaCatalogSetResultsMessage("");
+return;
+}
+if(yearSelect){ yearSelect.innerHTML = `<option value="">Loading years...</option>`; }
+const requestId = ++hufaCatalogRequestSeq;
+let years = [];
+try{ years = await getHufaCatalogYears(make, model); }catch(e){ years = []; }
+if(requestId !== hufaCatalogRequestSeq){ return; }
+hufaCatalogYears = Array.isArray(years) ? years : [];
+if(!hufaCatalogYears.length){
+hufaCatalogSetYearMode("manual");
+hufaCatalogSetResultsMessage("");
+return;
+}
+hufaCatalogSetYearMode("catalog");
+if(yearSelect){
+yearSelect.innerHTML = `<option value="">Select Catalogue Year</option>` + hufaCatalogYears.map((year)=>`<option value="${year}">${year}</option>`).join("");
+}
+hufaCatalogSetResultsMessage("Select a catalogue year to view the exact matching variants.");
+}
+
+async function hufaCatalogRefreshRows(){
+/* Create mode only (see hufaCatalogRefreshYears). */
+if(isEdit){ return; }
+const make = val("make").trim();
+const model = val("model").trim();
+const yearValue = document.getElementById("hufaCatalogYear")?.value || "";
+/* The catalogue Year IS the vehicle's Year: mirror it into #year
+(which sits in a field the catalogue UI currently hides) so the
+submit validation always has a real value, and a seller never has
+to type the year while catalogue years exist. */
+if(yearValue){ valSet("year", yearValue); }
+selectedHufaCatalog = null;
+hufaCatalogSetHidden();
+const selectedBox = document.getElementById("hufaCatalogSelected");
+if(selectedBox){ selectedBox.classList.add("hidden"); selectedBox.innerHTML = ""; }
+/* A new result set always starts in the DEFAULT view; the previous
+rendered presentations go with the cleared rows. */
+hufaCatalogView = "detailed";
+hufaCatalogClearViews();
+if(!make || !model || !yearValue){
+hufaCatalogRows = [];
+if(hufaYearMode === "catalog" && !yearValue){
+hufaCatalogSetResultsMessage("Select a catalogue year to view the exact matching variants.");
+}else{
+hufaCatalogSetResultsMessage("");
+}
+hufaCatalogApplyFieldVisibility();
+return;
+}
+const requestId = ++hufaCatalogRequestSeq;
+hufaCatalogSetResultsMessage("Loading catalogue variants...");
+let rows = [];
+let catalogFailed = false;
+try{
+rows = await getHufaCatalogVariants(make, model, yearValue);
+catalogFailed = (isHufaCatalogAvailable() === false);
+}catch(e){ rows = []; catalogFailed = true; }
+if(requestId !== hufaCatalogRequestSeq){ return; }
+hufaCatalogRows = Array.isArray(rows) ? rows : [];
+if(!hufaCatalogRows.length && catalogFailed){
+hufaCatalogSetResultsMessage("Catalogue lookup failed. You can continue with the Variant dropdown below or choose Other / Not Listed for manual entry.");
+hufaCatalogApplyFieldVisibility();
+return;
+}
+hufaCatalogRenderRows();
+}
+
+async function hufaCatalogRestoreFromDraft(draft){
+const make = val("make").trim();
+const model = val("model").trim();
+const requestedView = draft?.hufaCatalogView === "card" ? "card" : "detailed";
+hufaCatalogView = requestedView;
+const viewInput = document.getElementById("hufaCatalogView");
+if(viewInput){ viewInput.value = requestedView; }
+/* Capture the persisted manual-override flag BEFORE refreshYears
+clears it (the generic draft text loop has already written it
+into #hufaCatalogManual by the time this function runs). */
+const manualWanted = String(
+draft?.hufaCatalogManual || document.getElementById("hufaCatalogManual")?.value || ""
+).trim();
+if(!make || !model || model === "__OTHER_MODEL__"){
+hufaCatalogSetYearMode("manual");
+hufaCatalogSetResultsMessage("");
+hufaCatalogRenderExtraSpecs(null, false, hufaCatalogExtraDraftValues(draft));
+hufaCatalogApplyView(requestedView);
+return;
+}
+await hufaCatalogRefreshYears();
+if(manualWanted === "1" || manualWanted === "true"){
+/* The seller had abandoned the catalogue for this Make + Model:
+keep the plain Variant + Year fields (with the draft-restored
+values) exactly as they were. The next Make/Model change
+re-enables the catalogue path. */
+hufaCatalogManualOverride = true;
+const flag = document.getElementById("hufaCatalogManual");
+if(flag){ flag.value = "1"; }
+hufaCatalogApplyFieldVisibility();
+hufaCatalogRenderExtraSpecs(null, false, hufaCatalogExtraDraftValues(draft));
+hufaCatalogApplyView(requestedView);
+return;
+}
+if(hufaYearMode !== "catalog"){
+hufaCatalogRenderExtraSpecs(null, false, hufaCatalogExtraDraftValues(draft));
+hufaCatalogApplyView(requestedView);
+return;
+}
+/* Hidden year = year of the SELECTED catalogue row; visible
+drop-down year = the year whose rows were last displayed. Either
+one is enough to rebuild the exact same result list. */
+const selectedYear = String(draft?.hufaCatalogYearValue || "").trim();
+const listedYear = String(draft?.hufaCatalogYear || "").trim();
+const wantedYear = selectedYear || listedYear;
+const draftId = String(draft?.hufaCatalogId || "").trim();
+const yearSelect = document.getElementById("hufaCatalogYear");
+let restoredRows = false;
+if(wantedYear && yearSelect){
+const hasYear = Array.from(yearSelect.options || []).some((opt)=>String(opt.value) === wantedYear);
+if(hasYear){
+yearSelect.value = wantedYear;
+await hufaCatalogRefreshRows();
+restoredRows = true;
+}
+}
+if(!restoredRows){
+/* Search Vehicle loads all matching years. Its result rows are
+tab-local and cannot be inferred from the restored input values,
+so rebuild them even when no catalogue year was selected. */
+await hufaSearchDirectLoadCatalogue(make, model, hufaCatalogYears);
+}
+if(draftId){
+const index = hufaCatalogRows.findIndex((row)=>String(row?.id ?? "") === draftId);
+if(index >= 0){
+/* Fresh catalogue data restores the selected row; persisted seller
+edits are applied only to its dynamic spec controls below. */
+hufaCatalogMarkSelected(index, false);
+hufaCatalogRenderExtraSpecs(hufaCatalogRows[index], false, hufaCatalogExtraDraftValues(draft, hufaCatalogRows[index]));
+hufaCatalogRestoreExtraSpecDraft(draft, hufaCatalogRows[index]);
+}else{
+selectedHufaCatalog = null;
+hufaCatalogSetHidden();
+hufaCatalogRenderExtraSpecs(null, false, hufaCatalogExtraDraftValues(draft));
+}
+}else{
+hufaCatalogRenderExtraSpecs(null, false, hufaCatalogExtraDraftValues(draft));
+}
+hufaCatalogApplyView(requestedView);
+}
+
+function hufaCatalogExtraDraftValues(draft, row = null){
+const values = new Map();
+const numberSources = {
+  hufaSpec_cc: row?.cc,
+  hufaSpec_engine_size_l: row?.engine_size_l,
+  hufaSpec_kw: row?.kw,
+  hufaSpec_torque_nm: row?.torque_nm,
+  hufaSpec_cylinders: row?.cylinders,
+  hufaSpec_fuel_consumption_l100: row?.fuel_consumption_l100,
+  hufaSpec_co2_emissions_gkm: row?.co2_emissions_gkm,
+  hufaSpec_electric_range_km: row?.electric_range_km
+};
+for(const [id, source] of Object.entries(numberSources)){
+  if(typeof draft?.[id] === "string" && draft[id] !== "" && (!row || String(draft[id]) !== String(source ?? ""))) values.set(id, draft[id]);
+}
+for(const [id, key, source] of [["hufaSpec_turbocharged", "turbocharged", row?.turbocharged], ["hufaSpec_fast_charging", "fast_charging", row?.fast_charging]]){
+  const saved = draft?.hufaCatalogBooleanSpecs?.[key];
+  if(typeof saved === "boolean" && (!row || saved !== (source === true))) values.set(id, String(saved));
+}
+return values;
+}
+
+function hufaCatalogRestoreExtraSpecDraft(draft, row){
+const textIds = ["hufaSpec_cc", "hufaSpec_engine_size_l", "hufaSpec_kw", "hufaSpec_torque_nm", "hufaSpec_cylinders", "hufaSpec_fuel_consumption_l100", "hufaSpec_co2_emissions_gkm", "hufaSpec_electric_range_km"];
+const numberSources = {
+  hufaSpec_cc: row?.cc,
+  hufaSpec_engine_size_l: row?.engine_size_l,
+  hufaSpec_kw: row?.kw,
+  hufaSpec_torque_nm: row?.torque_nm,
+  hufaSpec_cylinders: row?.cylinders,
+  hufaSpec_fuel_consumption_l100: row?.fuel_consumption_l100,
+  hufaSpec_co2_emissions_gkm: row?.co2_emissions_gkm,
+  hufaSpec_electric_range_km: row?.electric_range_km
+};
+for(const id of textIds){
+  const field = document.getElementById(id);
+  if(!field || typeof draft?.[id] !== "string") continue;
+  field.value = draft[id];
+  if(String(draft[id]) !== String(numberSources[id] ?? "")) hufaCatalogFormWrites.delete(id);
+}
+for(const [id, key, source] of [["hufaSpec_turbocharged", "turbocharged", row?.turbocharged], ["hufaSpec_fast_charging", "fast_charging", row?.fast_charging]]){
+  const field = document.getElementById(id);
+  const saved = draft?.hufaCatalogBooleanSpecs?.[key];
+  if(!field || typeof saved !== "boolean") continue;
+  field.checked = saved;
+  if(saved !== (source === true)) hufaCatalogFormWrites.delete(id);
+}
 }
 
 async function fillModels(){
@@ -3449,40 +7319,16 @@ async function fillModels(){
     "make"
   ).value;
 
+  await populateModelOptions(make);
+
   const list =
   document.getElementById(
     "model"
   );
 
-  resetModels();
-
-  if(!make) return;
-
-const vehicleCategory =
-  val("vehicleCategory");
-
-const models =
-await getModels(
-  make,
-  vehicleCategory
-);
-
-  models.forEach(m=>{
-
-    const option =
-    document.createElement(
-      "option"
-    );
-
-    option.value = m;
-
-    option.textContent = m;
-
-    list.appendChild(
-      option
-    );
-
-  });
+  if(!make || !list){
+    return;
+  }
 
   const otherOption =
   document.createElement(
@@ -3509,48 +7355,26 @@ async function fillVariants(){
   const model =
   val("model").trim();
 
-  resetVariants();
-
   if(!make || !model){
+    resetVariants();
     return;
   }
 
   if(model === "__OTHER_MODEL__"){
+    resetVariants();
     return;
   }
 
-const vehicleCategory =
-  val("vehicleCategory");
+  await populateVariantOptions(make, model);
 
-const variants =
-await getVariants(
-  make,
-  model,
-  vehicleCategory
-);
   const list =
   document.getElementById(
     "variant"
   );
 
-  variants.forEach(variant=>{
-
-    const option =
-    document.createElement(
-      "option"
-    );
-
-    option.value =
-    variant;
-
-    option.textContent =
-    variant;
-
-    list.appendChild(
-      option
-    );
-
-  });
+  if(!list){
+    return;
+  }
 
   const otherOption =
   document.createElement(
@@ -3881,7 +7705,7 @@ function toggleFinanceFields(){
 
 }
 
-function toggleVehicleCategory(){
+async function toggleVehicleCategory(){
 
   const category =
     val("vehicleCategory");
@@ -3937,13 +7761,20 @@ function toggleVehicleCategory(){
 
   resetVariants();
 
+  /* HUFA catalogue: category change hides the catalogue block too
+  (resetVariants only clears selection/rows to avoid recursion). */
+  resetHufaCatalogStateOnly();
+
   toggleCustomModel();
 
   toggleCustomVariant();
 
-  /* Reload catalogue for the selected vehicle type */
+  /* Reload catalogue for the selected vehicle type. AWAITED so
+  callers that wait on this toggle (the draft restore) can rely
+  on the make options existing BEFORE Make/Model/Variant are
+  applied. Fire-and-forget callers are unaffected. */
 
-  fillMakes();
+  await fillMakes();
 
   if(ev){
 
@@ -4021,25 +7852,18 @@ async function fillCities(){
   }
 
   const cities =
-  await getCities(
-    province
-  );
+  await getCities(province);
 
   cities.forEach(name=>{
 
     const option =
-    document.createElement(
-      "option"
-    );
+      document.createElement("option");
 
     option.value = name;
 
-    option.textContent =
-    name;
+    option.textContent = name;
 
-    city.appendChild(
-      option
-    );
+    city.appendChild(option);
 
   });
 
@@ -4086,8 +7910,12 @@ async function handleVehicleSearch(){
 
   }
 
-  const vehicleCategory =
-    val("vehicleCategory");
+  /* HUFA VEHICLE SEARCH PHASE 3 — Search Vehicle must not depend on
+  the Vehicle Type selected in the form: pass null (unfiltered) so
+  getMakes/getModels/getVariants search across ALL vehicle identities.
+  Manual Make/Model/Variant cascade (fillMakes/populateModelOptions/
+  populateVariantOptions) keeps its existing Vehicle Type filter. */
+  const vehicleCategory = null;
 
   const makes =
     await getMakes(
@@ -4180,14 +8008,216 @@ async function handleVehicleSearch(){
 
   }
 
+  /* =========================================================
+  PHASE 1 - SEARCH SELECTION -> CATALOGUE TRIGGER
+  ---------------------------------------------------------
+  The matcher ABOVE tests the query against make, model and
+  variant INDEPENDENTLY, so a query that spans two fields
+  (e.g. "renault kwid", "bmw i4") matched nothing and no
+  suggestion could be produced to click - which means the
+  catalogue could never be reached from Search Vehicle.
+  This pass is purely ADDITIVE and runs ONLY for multi-token
+  queries: it matches the SAME query text against the
+  COMBINED identity string, so the combined suggestion
+  ("Renault Kwid") is produced. Clicking that suggestion
+  fills Make = Renault / Model = Kwid and then calls the
+  EXISTING hufaCatalogRefreshYears() in the click handler
+  above - the catalogue refresh already wired to this search
+  path - so the existing HUFA Catalogue refreshes for
+  Renault/Kwid.
+  A single-token query skips this block entirely, so the
+  existing single-token search behaviour is unchanged.
+  No existing field is renamed, no query is added, no
+  database/SQL change, and the legacy Make/Model/Variant
+  dropdown fallback is untouched. */
+  if(search.indexOf(" ") !== -1){
+
+    const phraseTokens =
+      search
+        .split(/\s+/)
+        .filter(Boolean);
+
+    /* Dedupe against the results the field-wise matcher above
+    already produced (a model such as "Grand Vitara" can still
+    match the whole phrase on its own). Key format is identical
+    on both sides so the same identity can never be listed twice. */
+    const phraseKey =
+      (make, model, variant)=>
+        [make, model, variant]
+          .join("|")
+          .toLowerCase();
+
+    const phraseSeen =
+      new Set(
+        matches.map(item=>
+          phraseKey(
+            item.make,
+            item.model,
+            item.variant
+          )
+        )
+      );
+
+    const addPhraseMatch =
+      (make, model, variant)=>{
+
+        const identity =
+          [make, model, variant]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+        if(!identity){ return; }
+
+        for(const token of phraseTokens){
+
+          if(!identity.includes(token)){
+
+            return;
+
+          }
+
+        }
+
+        const key =
+          phraseKey(make, model, variant);
+
+        if(phraseSeen.has(key)){ return; }
+
+        phraseSeen.add(key);
+
+        matches.push({
+
+          make,
+
+          model: model || "",
+
+          variant: variant || ""
+
+        });
+
+      };
+
+    for(const make of makes){
+
+      addPhraseMatch(make, "", "");
+
+      const models =
+        await getModels(
+          make,
+          vehicleCategory
+        );
+
+      for(const model of models){
+
+        addPhraseMatch(make, model, "");
+
+        const variants =
+          await getVariants(
+            make,
+            model,
+            vehicleCategory
+          );
+
+        variants.forEach(
+          variant=>
+            addPhraseMatch(
+              make,
+              model,
+              variant
+            )
+        );
+
+      }
+
+    }
+
+  }
+
+  /* =========================================================
+  PHASE 2 (HUFA VEHICLE SEARCH) - SUGGESTIONS ARE VEHICLE IDENTITIES
+  ---------------------------------------------------------
+  The Phase 1 matcher ABOVE is preserved unchanged: field-wise
+  matching plus the additive multi-token phrase pass still build
+  `matches` (Make / Make+Model / Make+Model+Variant rows). What
+  changes is ONLY the presentation/selection below:
+  - variant-level rows collapse to their Make + Model identity,
+    so "Renault Kwid 1.0 Climber 5MT" never appears in the
+    dropdown - it belongs in the results table;
+  - a make-only row (e.g. typing "Toyota") expands to that
+    make's matching Model identities (Toyota Hilux, ...), so the
+    suggestion is still a clickable vehicle identity;
+  - clicking an identity fills Make + Model and calls
+    hufaSearchDirectLoadCatalogue(), which loads ALL catalogue
+    records for that identity into the EXISTING detailed table
+    with NO Year choice required.
+  Single-token behaviour and the 25-result cap below apply to the
+  collapsed identities. HUFA VEHICLE SEARCH PHASE 3: identity search
+  is unfiltered by Vehicle Type (null category); the manual
+  Make/Model/Variant cascade keeps its Vehicle Type filter. Variant-specific
+  phrase matches still collapse to the same identity (the full
+  rows reach the table after the click). */
+  const identitySeen = new Set();
+  const identities = [];
+  const identityKey = (make, model)=>
+    [String(make ?? "").trim().toLowerCase(), String(model ?? "").trim().toLowerCase()].join("|");
+  const pushIdentity = (make, model)=>{
+    const cleanMake = String(make ?? "").trim();
+    const cleanModel = String(model ?? "").trim();
+    if(!cleanMake || !cleanModel){ return; }
+    if(cleanModel === "__OTHER_MODEL__" || cleanModel === "__OTHER__"){ return; }
+    const key = identityKey(cleanMake, cleanModel);
+    if(identitySeen.has(key)){ return; }
+    identitySeen.add(key);
+    identities.push({ make: cleanMake, model: cleanModel });
+  };
+  for(const item of matches){
+    if(item && item.model){
+      pushIdentity(item.make, item.model);
+    }
+  }
+  /* Make-only rows become identities: if the query already named
+  models for that make they are above; otherwise expand the make
+  to its matching models so "Toyota" still offers vehicles. */
+  for(const item of matches){
+    if(!item || item.model){ continue; }
+    if(!item.make){ continue; }
+    let modelsForMake = [];
+    try{ modelsForMake = await getModels(item.make, vehicleCategory); }catch(e){ modelsForMake = []; }
+    if(!Array.isArray(modelsForMake) || !modelsForMake.length){ continue; }
+    const matchingModels = modelsForMake.filter((modelName)=>{
+      const identity = (String(item.make) + " " + String(modelName)).toLowerCase();
+      return phraseTokensEverywhere(search, identity);
+    });
+    const modelsToOffer = matchingModels.length ? matchingModels : modelsForMake.slice(0, 25);
+    for(const modelName of modelsToOffer){
+      pushIdentity(item.make, modelName);
+      if(identities.length >= 25){ break; }
+    }
+    if(identities.length >= 25){ break; }
+  }
+  function phraseTokensEverywhere(queryText, identityText){
+    const tokens = String(queryText || "").toLowerCase().split(/\s+/).filter(Boolean);
+    const hay = String(identityText || "").toLowerCase();
+    for(const token of tokens){
+      if(!hay.includes(token)){ return false; }
+    }
+    return true;
+  }
+
   console.log(
     "Vehicle Search Matches",
     matches
   );
 
+  console.log(
+    "Vehicle Search Identities",
+    identities
+  );
+
   results.innerHTML = "";
 
-  if(!matches.length){
+  if(!identities.length){
 
     results.innerHTML = `
       <div class="px-4 py-3 text-sm text-slate-500">
@@ -4203,7 +8233,7 @@ async function handleVehicleSearch(){
 
   }
 
-  matches
+  identities
     .slice(0,25)
     .forEach(item=>{
 
@@ -4215,22 +8245,8 @@ async function handleVehicleSearch(){
       row.className =
         "w-full text-left px-4 py-3 hover:bg-slate-100 border-b border-slate-100 transition";
 
-      let title =
-        item.make;
-
-      if(item.model){
-
-        title +=
-          ` ${item.model}`;
-
-      }
-
-      if(item.variant){
-
-        title +=
-          ` ${item.variant}`;
-
-      }
+      const title =
+        `${item.make} ${item.model}`;
 
       row.innerHTML = `
 
@@ -4241,7 +8257,6 @@ async function handleVehicleSearch(){
         <div class="text-xs text-slate-500 mt-1">
           ${item.make}
           ${item.model ? "• " + item.model : ""}
-          ${item.variant ? "• " + item.variant : ""}
         </div>
 
       `;
@@ -4253,7 +8268,7 @@ async function handleVehicleSearch(){
         item.model;
 
       row.dataset.variant =
-        item.variant;
+        "";
 
       row.onclick = async ()=>{
 
@@ -4263,13 +8278,29 @@ async function handleVehicleSearch(){
 
         input.value = [
           item.make,
-          item.model,
-          item.variant
+          item.model
         ]
         .filter(Boolean)
         .join(" ");
 
         results.innerHTML = "";
+
+        /* HUFA VEHICLE SEARCH PHASE 3 — the Make dropdown is still
+        filtered by the form's Vehicle Type, so a cross-category
+        identity (e.g. BYD found while Commercial is selected) may
+        have no <option> yet. Pin the searched make as a real option
+        first so the existing valSet below cannot silently fail;
+        manual cascade filtering is otherwise untouched. */
+        const makeSelect = document.getElementById("make");
+        if(makeSelect && item.make){
+          const hasMake = Array.from(makeSelect.options || []).some((opt)=>String(opt.value).trim() === String(item.make).trim() || String(opt.textContent || "").trim() === String(item.make).trim());
+          if(!hasMake){
+            const opt = document.createElement("option");
+            opt.value = item.make;
+            opt.textContent = item.make;
+            makeSelect.appendChild(opt);
+          }
+        }
 
         valSet(
           "make",
@@ -4277,6 +8308,26 @@ async function handleVehicleSearch(){
         );
 
         await fillModels();
+
+        /* HUFA VEHICLE SEARCH PHASE 3 — same gate for Model:
+        fillModels() above rebuilds #model from the currently
+        selected Vehicle Type, so append the searched model when the
+        filter excluded it. */
+        const modelSelect = document.getElementById("model");
+        if(modelSelect && item.model){
+          const hasModel = Array.from(modelSelect.options || []).some((opt)=>String(opt.value).trim() === String(item.model).trim() || String(opt.textContent || "").trim() === String(item.model).trim());
+          if(!hasModel){
+            const opt = document.createElement("option");
+            opt.value = item.model;
+            opt.textContent = item.model;
+            const otherOpt = Array.from(modelSelect.options || []).find((opt)=>opt.value === "__OTHER_MODEL__");
+            if(otherOpt){
+              modelSelect.insertBefore(opt, otherOpt);
+            }else{
+              modelSelect.appendChild(opt);
+            }
+          }
+        }
 
         valSet(
           "model",
@@ -4287,12 +8338,18 @@ async function handleVehicleSearch(){
 
         valSet(
           "variant",
-          item.variant
+          ""
         );
 
         toggleCustomModel();
 
         toggleCustomVariant();
+
+        /* PHASE 2 direct load: vehicle identity -> EXISTING
+        detailed results table, no Year choice required. The
+        legacy #variant value is cleared above (no invented
+        variant); the catalogue rows carry the real variants. */
+        await hufaSearchDirectLoadCatalogue(item.make, item.model);
 
       };
 

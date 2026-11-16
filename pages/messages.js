@@ -22,6 +22,17 @@ getMessageAttachments
 } from "../js/api.js";
 import { renderDashboardShell, renderDashboardPageHeading } from "./dashboard.js";
 
+/* PHASE 6C — Messages reply draft persistence. Reuses the
+   SAME shared user-scoped draftStore foundation with its
+   own workflow name (hufa:draft:messageReply:<userId>).
+   ONLY the typed reply text is stored — no tokens, no auth
+   data, no attachments, no unrelated conversation data. */
+import {
+  saveDraft as saveMessageReplyDraftRecord,
+  loadDraft as loadMessageReplyDraftRecord,
+  clearDraft as clearMessageReplyDraftRecord
+} from "../js/draftStore.js";
+
 let realtimeChannel = null;
 let activeConversation = null;
 
@@ -45,6 +56,317 @@ after Mark Read writes to the messages table). */
 let loadSequence = 0;
 
 let conversationPrefs = [];
+
+/* =========================================
+PHASE 6C — MESSAGES REPLY DRAFT (draftStore)
+Persist each conversation's typed reply so it survives
+refresh / SPA navigation / thread re-renders until the
+reply is successfully sent. Reuses the shared user-scoped
+draftStore (hufa:draft:messageReply:<userId>) — no
+separate storage and no IndexedDB.
+
+Identity: the DOM id replyBox-<index> is deliberately NOT
+trusted (loadMessages() re-sorts the list, so an index can
+point at a different conversation). The project's own
+established stable identity — the buyer + vehicle pair
+(otherUser + latest.vehicle_id), the same pair used by
+activeConversation and the CRM hand-off matching — is used
+as the per-conversation draft key inside ONE draft record
+per user. A composite draft key was deliberately NOT used:
+draftStore's sanitizeKeyPart converts ':' to '_', which
+would break the existing purgeUserDrafts suffix matching on
+sign-out. Only plain string reply text is stored — no
+message ids, no tokens, no auth data, no attachments.
+========================================= */
+
+const MESSAGE_REPLY_DRAFT_WORKFLOW = "messageReply";
+
+let messageReplyDraftSaveTimer = null;
+
+/* Pending autosave context captured at input time
+(conversation identity + text) so a list re-sort between
+keystroke and save can never mis-associate text with the
+wrong conversation. */
+let messageReplyDraftPending = null;
+
+/* The conversation whose reply box is currently rendered.
+Tracked at thread render time (openConversation). */
+let messageReplyDraftActive = null;
+
+/* Same sanitization contract as draftStore's internal
+sanitizeKeyPart, applied to identity parts used as
+data-map keys. */
+function sanitizeMessageReplyDraftKeyPart(value){
+  const raw = String(value || "").trim();
+  if(!raw){ return ""; }
+  const cleaned =
+  raw.replace(/[^A-Za-z0-9-_]/g, "_").slice(0, 80);
+  return cleaned.replace(/^_+|_+$/g, "") || "";
+}
+
+/* Builds the stable per-conversation draft key from the
+project's buyer + vehicle pair. */
+function buildMessageReplyDraftKey(otherUserId, vehicleId){
+  const u =
+  sanitizeMessageReplyDraftKeyPart(otherUserId);
+  const v =
+  sanitizeMessageReplyDraftKeyPart(vehicleId);
+  if(!u || !v){ return ""; }
+  return `u_${u}_v_${v}`;
+}
+
+/* Resolves the stable identity of the conversation a
+replyBox-<index> currently belongs to. Returns "" when the
+index no longer resolves (list re-sorted/removed). */
+function messageReplyDraftKeyForIndex(index){
+  const conversation =
+  (window.currentConversations || [])[index];
+  if(!conversation){ return ""; }
+  return buildMessageReplyDraftKey(
+    conversation.otherUser,
+    conversation.latest?.vehicle_id
+  );
+}
+
+/* Allowlist guard: the reply draft data must be a plain
+object of safe conversation keys to string reply text.
+Anything else is rejected so unsafe data can never enter a
+textarea. */
+function isSafeMessageReplyDraftMap(value){
+  if(
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ){
+    return false;
+  }
+  for(const key of Object.keys(value)){
+    if(
+      key !== sanitizeMessageReplyDraftKeyPart(key)
+    ){ return false; }
+    if(typeof value[key] !== "string"){ return false; }
+  }
+  return true;
+}
+
+/* Resolves the current authenticated user id via the SAME
+auth helper the rest of the messaging pipeline uses.
+Returns "" when signed out so no shared/anonymous draft
+can leak between users. */
+async function resolveMessageReplyDraftUserId(){
+  try{
+    const user = await getAuthUser();
+    const id = user?.id;
+    return typeof id === "string" && id ? id : "";
+  }catch(e){
+    return "";
+  }
+}
+
+/* Removes one conversation's entry from the user's reply
+draft map; clears the whole record when the map becomes
+empty so no unnecessary empty records are stored. */
+async function removeMessageReplyDraftEntry(userId, convKey){
+  try{
+    const map =
+    loadMessageReplyDraftRecord(
+      MESSAGE_REPLY_DRAFT_WORKFLOW,
+      userId
+    );
+    if(!isSafeMessageReplyDraftMap(map)){ return; }
+    if(
+      !Object.prototype.hasOwnProperty.call(map, convKey)
+    ){ return; }
+    delete map[convKey];
+    if(Object.keys(map).length){
+      saveMessageReplyDraftRecord(
+        MESSAGE_REPLY_DRAFT_WORKFLOW,
+        userId,
+        map
+      );
+    }else{
+      clearMessageReplyDraftRecord(
+        MESSAGE_REPLY_DRAFT_WORKFLOW,
+        userId
+      );
+    }
+  }catch(e){}
+}
+
+/* Persists the CURRENT reply text for the pending
+conversation. Prefers the live textarea value when it is
+non-empty (an empty live box right after a thread
+re-render must not wipe the captured text before the async
+restore lands). An empty textarea removes the entry
+instead of storing an empty record. Failures are silent
+and never block messaging. */
+async function persistMessageReplyDraftNow(){
+  try{
+    const pending = messageReplyDraftPending;
+    messageReplyDraftPending = null;
+    if(!pending || !pending.convKey){ return; }
+    let text =
+    typeof pending.text === "string" ? pending.text : "";
+    if(
+      messageReplyDraftActive &&
+      messageReplyDraftActive.convKey === pending.convKey
+    ){
+      const liveBox =
+      document.getElementById(
+        `replyBox-${messageReplyDraftActive.index}`
+      );
+      if(liveBox){
+        const live =
+        typeof liveBox.value === "string" ? liveBox.value : "";
+        if(live.trim()){
+          text = live;
+        }else if(!text.trim()){
+          text = "";
+        }
+      }
+    }
+    const userId =
+    await resolveMessageReplyDraftUserId();
+    if(!userId){ return; }
+    if(!text.trim()){
+      await removeMessageReplyDraftEntry(
+        userId,
+        pending.convKey
+      );
+      return;
+    }
+    const map =
+    loadMessageReplyDraftRecord(
+      MESSAGE_REPLY_DRAFT_WORKFLOW,
+      userId
+    );
+    const safeMap =
+    isSafeMessageReplyDraftMap(map) ? map : {};
+    safeMap[pending.convKey] = text;
+    saveMessageReplyDraftRecord(
+      MESSAGE_REPLY_DRAFT_WORKFLOW,
+      userId,
+      safeMap
+    );
+  }catch(e){
+    /* Draft persistence is best-effort only. */
+  }
+}
+
+/* Debounced autosave. Captures the current conversation
+identity + text at input time; a switch to another
+conversation flushes the previous one's pending save
+immediately so its text is never lost or mis-associated. */
+function scheduleMessageReplyDraftSave(convKey, capturedText){
+  if(!convKey){ return; }
+  if(
+    messageReplyDraftPending &&
+    messageReplyDraftPending.convKey !== convKey
+  ){
+    if(messageReplyDraftSaveTimer){
+      clearTimeout(messageReplyDraftSaveTimer);
+      messageReplyDraftSaveTimer = null;
+    }
+    persistMessageReplyDraftNow();
+  }
+  messageReplyDraftPending = {
+    convKey,
+    text:
+      typeof capturedText === "string" ? capturedText : ""
+  };
+  if(messageReplyDraftSaveTimer){
+    clearTimeout(messageReplyDraftSaveTimer);
+  }
+  messageReplyDraftSaveTimer = setTimeout(()=>{
+    messageReplyDraftSaveTimer = null;
+    persistMessageReplyDraftNow();
+  }, 600);
+}
+
+/* Restores the saved draft for ONE conversation into its
+freshly rendered reply box. Never overwrites content that
+is already in the box and never touches sent messages
+(those live in the messages table, not here). */
+async function restoreMessageReplyDraft(index){
+  try{
+    const convKey =
+    messageReplyDraftKeyForIndex(index);
+    if(!convKey){ return; }
+    let replyBox =
+    document.getElementById(`replyBox-${index}`);
+    if(!replyBox || replyBox.value){ return; }
+    const userId =
+    await resolveMessageReplyDraftUserId();
+    if(!userId){ return; }
+    /* A realtime refresh may have re-rendered the thread
+    while we were loading: only fill a box that still
+    belongs to this conversation. */
+    if(
+      messageReplyDraftActive &&
+      messageReplyDraftActive.convKey !== convKey
+    ){ return; }
+    replyBox =
+    document.getElementById(`replyBox-${index}`);
+    if(!replyBox || replyBox.value){ return; }
+    const map =
+    loadMessageReplyDraftRecord(
+      MESSAGE_REPLY_DRAFT_WORKFLOW,
+      userId
+    );
+    if(!isSafeMessageReplyDraftMap(map)){ return; }
+    const text = map[convKey];
+    if(typeof text === "string" && text){
+      replyBox.value = text;
+    }
+  }catch(e){
+    /* Restore is best-effort only. */
+  }
+}
+
+/* Clears ONLY the given conversation's reply draft entry
+(called after a successful send). Cancels any pending
+debounced write first so nothing can re-save it. */
+async function clearMessageReplyDraftForConversation(convKey){
+  if(messageReplyDraftSaveTimer){
+    clearTimeout(messageReplyDraftSaveTimer);
+    messageReplyDraftSaveTimer = null;
+  }
+  messageReplyDraftPending = null;
+  if(!convKey){ return; }
+  const userId =
+  await resolveMessageReplyDraftUserId();
+  if(!userId){ return; }
+  await removeMessageReplyDraftEntry(userId, convKey);
+}
+
+/* PHASE 6C — ONE delegated autosave listener for ALL reply
+boxes (module scope, registered once; thread re-renders
+never re-register it — follows the page's existing
+delegated/oninput binding pattern rather than adding
+per-render listeners). */
+document.addEventListener(
+  "input",
+  function(e){
+    const target = e.target;
+    if(
+      !target ||
+      typeof target.id !== "string" ||
+      target.id.indexOf("replyBox-") !== 0
+    ){
+      return;
+    }
+    const index =
+    Number(target.id.slice("replyBox-".length));
+    if(!Number.isInteger(index) || index < 0){ return; }
+    const convKey =
+    messageReplyDraftKeyForIndex(index);
+    if(!convKey){ return; }
+    scheduleMessageReplyDraftSave(
+      convKey,
+      typeof target.value === "string" ? target.value : ""
+    );
+  }
+);
 
 export function MessagesPage(){
 
@@ -2340,6 +2662,18 @@ if(replyBox){
 replyBox.focus();
 }
 
+/* PHASE 6C — track which conversation this open thread
+belongs to (the stable buyer + vehicle identity, not the
+shift-prone index), then restore any saved draft into the
+freshly rendered reply box. No draft: behaves exactly as
+before. */
+messageReplyDraftActive = {
+index,
+convKey: messageReplyDraftKeyForIndex(index)
+};
+
+restoreMessageReplyDraft(index);
+
 }finally{
 
 threadLoading = false;
@@ -2502,6 +2836,18 @@ return;
 /* RESET */
 
 input.value = "";
+
+/* PHASE 6C — the reply sent successfully, so clear ONLY
+this conversation's draft entry (resolved from the exact
+conversation object that was sent to, before the list
+refresh below re-renders the box). Send failures above
+keep the draft. */
+await clearMessageReplyDraftForConversation(
+buildMessageReplyDraftKey(
+conversation.otherUser,
+conversation.latest?.vehicle_id
+)
+);
 
 await loadMessages(true);
 

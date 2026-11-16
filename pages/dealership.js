@@ -1,11 +1,17 @@
 import { supabase } from "../js/api.js";
 import { navigate, updateSEO } from "../js/router.js";
-import { toast, toggleCompare } from "../js/ui.js";
+import { toast, toggleCompare, showGuestLimitModal } from "../js/ui.js";
 import {
   renderVehicleCard,
   renderVehicleCardSkeletons
 } from "../components/vehicleCard.js";
 import { buildSocialLinks } from "../js/socialProfile.js";
+import { getCardDetailLevel } from "../js/cardDetailPreference.js";
+import {
+  getGuestSaved,
+  addGuestSaved,
+  removeGuestSaved
+} from "../js/guestStore.js";
 
 /* ============================================================
    PHASE 2 — PUBLIC HUFA DEALERSHIP STOREFRONT (/dealership)
@@ -335,7 +341,21 @@ const { data: userData } =
 await supabase.auth.getUser();
 
 if (!userData?.user) {
+
+/* GUEST — browser-side saved ids (max 2). */
+
+savedSet =
+new Set(getGuestSaved());
+
+const guestGrid =
+document.getElementById("dealerGrid");
+
+if (guestGrid && vehicles.length) {
+renderGrid();
+}
+
 return;
+
 }
 
 const { data, error } =
@@ -410,12 +430,20 @@ return String(phone || "").replace(/[^+\d]/g, "");
 
 function locationLine() {
 
-/* public.profiles has NO city/province columns (Phase 4 verified).
-   Location is the real dealership_address when present, otherwise
-   a neutral fallback. Nothing is inferred from an address string. */
+/* PHASE 3 — location line now shows BOTH available location
+   values: the real dealership_address and the dedicated
+   profiles.province column (a verified live column; the
+   storefront profile row is select("*") so dealer.province is
+   already loaded). Nothing is inferred from an address string.
+   City is NOT shown: profiles has NO city column and no
+   retrievable city source exists — a database/storage decision
+   is required (see Phase 3 report). */
 const address = (dealer?.dealership_address || "").trim();
+const province = (dealer?.province || "").trim();
 
-if (address) return address;
+const parts = [address, province].filter(Boolean);
+
+if (parts.length) return parts.join(", ");
 return "South Africa";
 
 }
@@ -989,7 +1017,8 @@ grid.innerHTML = list
 renderVehicleCard(v, {
 layout: "grid",
 actions: "browse",
-saved: savedSet.has(v.id)
+saved: savedSet.has(v.id),
+detailLevel: getCardDetailLevel()
 })
 )
 .join("");
@@ -1082,9 +1111,36 @@ const { data: userData } =
 await supabase.auth.getUser();
 
 if (!userData?.user) {
-toast("Login to save vehicles");
-navigate("/login");
+
+/* =========================================
+   GUEST — save / unsave locally (max 2).
+   Never redirected to login.
+========================================= */
+
+if (savedSet.has(id)) {
+
+removeGuestSaved(id);
+savedSet.delete(id);
+toast("Removed from saved");
+
+} else {
+
+const result = addGuestSaved(id);
+
+if (!result.ok) {
+showGuestLimitModal("save");
 return;
+}
+
+savedSet.add(id);
+toast("Saved vehicle");
+
+}
+
+renderGrid();
+
+return;
+
 }
 
 if (savedSet.has(id)) {
