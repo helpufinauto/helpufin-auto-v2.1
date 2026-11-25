@@ -5982,8 +5982,6 @@ window.openFullscreenViewer = function(index){
     </button>
     ` : ""}
 
-    <!-- IMAGE STAGE -->)">
-FIXEDDUMMY2
     <!-- IMAGE STAGE -->
     <div class="hufa-fs-stage" id="fsStage">
       <img id="fsImg"
@@ -5991,17 +5989,6 @@ FIXEDDUMMY2
         class="hufa-fs-img"
         onerror="this.src='${asset("/assets/HUF1.webp")}'">
     </div>
-
-    <!-- NEXT -->
-FIXEDDUMMY2
-    <!-- IMAGE STAGE -->
-    <div class="hufa-fs-stage" id="fsStage">
-      <img id="fsImg"
-        src="${imageList[currentImageIndex]}"
-        class="hufa-fs-img"
-        onerror="this.src='${asset("/assets/HUF1.webp")}'">
-    </div>
-
     <!-- NEXT -->
     ${imageList.length > 1 ? `
     <button onclick="fsNext()" class="hufa-fs-nav hufa-fs-next" title="Next (→)">

@@ -2243,11 +2243,7 @@ window.toggleInventorySection = (id)=>{
 Browse Vehicles
 </h1>
 
-<div class="mt-2 flex flex-wrap items-center gap-2" data-card-detail-selector>
-  <span class="text-[11px] font-semibold text-slate-500">Card details</span>
-  <button type="button" data-detail-level="simple" class="rounded-lg border px-2.5 py-1 text-[11px] font-semibold" aria-pressed="true">Simple</button>
-  <button type="button" data-detail-level="detailed" class="rounded-lg border px-2.5 py-1 text-[11px] font-semibold" aria-pressed="false">Detailed</button>
-</div>
+
 
 <p class="text-slate-600 text-[11px] browse-subtitle">
 Find the perfect vehicle from dealerships and private sellers across South Africa

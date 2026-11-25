@@ -1,4 +1,4 @@
-body {
+﻿body {
     margin: 0;
     padding: 0;
     background: #F7F8FA;
@@ -456,11 +456,11 @@ opacity
     box-shadow: 0 0 0 2px rgba(182,147,92,0.15)
 }
 /* =========================================
-   PHASE 12 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PASSWORD REQUIREMENTS PANEL
+   PHASE 12 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â PASSWORD REQUIREMENTS PANEL
    Shared by /signup and /reset-password.
    Compact live checklist. Each rule flips
    between unmet (gray circle) and met
-   (emerald check) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â state is communicated
+   (emerald check) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â state is communicated
    by icon shape, color AND text weight.
    ========================================= */
 .pwd-requirements {
@@ -1386,7 +1386,7 @@ inset 0 1px 0 rgba(255,255,255,0.12)
         margin-bottom: 0
     }
     #crmLeadTable .text-xs.font-semibold.text-blue-600::after {
-        content: " Ãƒâ€šÃ‚Â·";
+        content: " ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·";
         margin: 0 2px;
         color: #94A3B8;
         font-weight: 600
@@ -6017,7 +6017,6 @@ scale(1.08);
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     opacity: 0;
     transition: opacity 0.3s ease
 }
@@ -6032,7 +6031,7 @@ scale(1.08);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 24px;
+    padding: 10px 16px;
     z-index: 10
 }
 .hufa-fs-counter {
@@ -6102,12 +6101,14 @@ scale(1.08);
     align-items: center;
     justify-content: center;
     width: 100%;
-    padding: 80px 100px 120px;
-    overflow: hidden
+    padding: 60px 80px 100px;
+    overflow: hidden;
+    min-height: 300px;
+    box-sizing: border-box;
 }
 .hufa-fs-img {
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
     border-radius: 12px;
     cursor: zoom-in;
@@ -6122,9 +6123,12 @@ opacity 0.15s ease;
     left: 0;
     right: 0;
     display: flex;
-    gap: 8px;
-    padding: 20px 24px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 12px 28px;
     overflow-x: auto;
+    overflow-y: hidden;
     justify-content: center;
     z-index: 10
 }
@@ -6137,8 +6141,8 @@ opacity 0.15s ease;
 }
 .hufa-fs-thumb {
     flex-shrink: 0;
-    width: 72px;
-    height: 54px;
+    width: 112px;
+    height: 84px;
     border-radius: 8px;
     overflow: hidden;
     cursor: pointer;
@@ -6162,7 +6166,9 @@ opacity 0.15s ease;
 }
 @media (max-width:768px) {
     .hufa-fs-stage {
-        padding: 70px 16px 100px
+        padding: 40px 12px 80px;
+        min-height: 250px;
+        box-sizing: border-box;
     }
     .hufa-fs-nav {
         width: 44px;
@@ -6175,14 +6181,14 @@ opacity 0.15s ease;
         right: 12px
     }
     .hufa-fs-topbar {
-        padding: 16px
+        padding: 12px
     }
     .hufa-fs-thumb {
-        width: 56px;
-        height: 42px
+        width: 80px;
+        height: 60px
     }
     .hufa-fs-thumbs {
-        padding: 16px
+        padding: 10px 20px
     }
 }
 .hide-scrollbar::-webkit-scrollbar {
@@ -7236,7 +7242,7 @@ rgba(0,0,0,0) 97%
     letter-spacing: 0.02em;
 }
 
-/* ---------- SAVED GRID — FIX 5-COLUMN LAYOUT AT DESKTOP ---------- */
+/* ---------- SAVED GRID â€” FIX 5-COLUMN LAYOUT AT DESKTOP ---------- */
 
 /* Ensure the grid uses 5 columns at xl breakpoint and above */
 .saved-page .saved-grid {
@@ -10740,7 +10746,7 @@ rgba(238,243,249,0) 100%
 .hufa-form #preview .hufa-image-slot:first-child img::before {
     content: none
 }
-/* PHASE 3 — Upload Vehicle image manager: drop highlight,
+/* PHASE 3 â€” Upload Vehicle image manager: drop highlight,
    numeric position badge, "Cover" label (position 1 only)
    and Manage-Vehicle-style reorder buttons. No emoji and no
    pseudo-element star/cover text: badges are explicit DOM. */
@@ -10842,7 +10848,7 @@ rgba(238,243,249,0) 100%
         left: 42px
     }
 }
-/* PHASE 5 — drag-and-drop reorder affordances for the Upload
+/* PHASE 5 â€” drag-and-drop reorder affordances for the Upload
 Vehicle image manager. Visual-only classes: no emoji, no
 pseudo-element content, matching the existing badge styling. */
 .hufa-form #preview .hufa-image-slot[draggable="true"] {
@@ -16330,7 +16336,7 @@ pseudo-element content, matching the existing badge styling. */
   )
 }
 /* =========================================
-PHASE 3 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â MFA (TWO-FACTOR AUTHENTICATION)
+PHASE 3 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â MFA (TWO-FACTOR AUTHENTICATION)
 Shared by the Edit Profile modal security
 section and the /mfa-verify page. Same HUFA
 visual language: navy #0A192F, slate #64748B,
@@ -16497,7 +16503,7 @@ orange accent #E48A2F, primary blue #005BBF.
     color: #94A3B8
 }
 /* =========================================
-PHASE 4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â MFA UI/UX HARDENING
+PHASE 4 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â MFA UI/UX HARDENING
 Refines the Phase 3 MFA section (Edit Profile
 modal) and the /mfa-verify page. Same HUFA
 visual language: navy #0A192F, slate #64748B,
@@ -16505,12 +16511,12 @@ orange accent #E48A2F, primary blue #005BBF.
 No new dependencies.
 
 Layout goals:
-ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Desktop ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â two-column enrollment (QR left,
+ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Desktop ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â two-column enrollment (QR left,
   numbered steps + manual secret + code field
   right) inside a temporarily widened modal so
   the setup stays compact without excessive
   vertical scrolling.
-ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Mobile ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single column, QR fully visible,
+ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Mobile ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â single column, QR fully visible,
   large touch targets, clear action hierarchy.
 ========================================= */
 
@@ -16975,9 +16981,9 @@ a.contact-info-v:hover{color:#005BBF}
 /* ================= END CONTACT PAGE ================= */
 
 /* =========================================================
-   PHASE 1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â DEALERSHIP DIRECTORY (/dealerships)
+   PHASE 1 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â DEALERSHIP DIRECTORY (/dealerships)
    Namespaced (dealership-* / dealer-*) so no existing page
-   is affected. Plain CSS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â independent of the prebuilt
+   is affected. Plain CSS ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â independent of the prebuilt
    Tailwind bundle (css/tailwind.css), whose generated
    utilities are frozen at build time. Uses the existing
    HUFA palette: navy #081120 / #0A192F, blue #005BBF,
@@ -17013,7 +17019,7 @@ a.contact-info-v:hover{color:#005BBF}
 
 @media (min-width: 1024px) {
     .dealership-filter-grid {
-        /* PHASE 1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Location filter added alongside the existing
+        /* PHASE 1 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Location filter added alongside the existing
            Vehicle Inventory + Sort filters. 3 columns on desktop. */
         grid-template-columns: repeat(3, minmax(0, 1fr))
     }
@@ -17052,14 +17058,14 @@ a.contact-info-v:hover{color:#005BBF}
 }
 
 /* =========================================================
-   PHASE 4A ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â MOBILE-ONLY POLISH (/dealerships + /contact)
+   PHASE 4A ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â MOBILE-ONLY POLISH (/dealerships + /contact)
    Desktop is locked: every rule below is max-width scoped.
    ========================================================= */
 @media (max-width:640px){
     .dealership-filter-grid{grid-template-columns:minmax(0,1fr);gap:10px}
     .dealership-toolbar{padding:16px;border-radius:18px}
     .dealer-search-input{height:48px;min-height:48px;font-size:16px;border-radius:14px}
-    #dealerInventory,#dealerLocation,#dealerSort{height:48px;min-height:48px;font-size:15px}
+    #dealerInventory{height:auto;min-height:48px;font-size:15px}
     .dealership-card{padding:18px;border-radius:18px}
     .dealership-card h3{white-space:normal;overflow:visible;text-overflow:clip}
     .dealership-card p{white-space:normal;overflow:visible;text-overflow:clip}
@@ -17106,10 +17112,10 @@ a.contact-info-v:hover{color:#005BBF}
 }
 
 /* =========================================================
-   PHASE 2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PUBLIC DEALERSHIP STOREFRONT (/dealership)
+   PHASE 2 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â PUBLIC DEALERSHIP STOREFRONT (/dealership)
    =========================================================
    Namespaced (dstore-*) so NO existing page is affected.
-   Plain CSS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â independent of the prebuilt Tailwind bundle
+   Plain CSS ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â independent of the prebuilt Tailwind bundle
    (css/tailwind.css), whose generated utilities are frozen at
    build time (same approach as the Phase 1 directory above).
    Uses the existing HUFA palette: navy #081120 / #0A192F,
@@ -17120,6 +17126,17 @@ a.contact-info-v:hover{color:#005BBF}
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px 12px 44px
+}
+
+@media (max-width: 480px) {
+    .dstore-page {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
+    #dealerInventory {
+        flex: 1 1 auto;
+    }
 }
 
 /* ---------- HERO / IDENTITY ---------- */
@@ -17537,7 +17554,7 @@ a.contact-info-v:hover{color:#005BBF}
     gap: 8px
 }
 
-/* .premium-select already carries the HUFA select treatment ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+/* .premium-select already carries the HUFA select treatment ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â
    .dstore-select only guarantees it never overflows. */
 
 .dstore-select {
@@ -17717,16 +17734,16 @@ a.contact-info-v:hover{color:#005BBF}
 }
 
 /* =========================================================
-   PHASE 3 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â DEALER DASHBOARD: EDIT DEALERSHIP PAGE
+   PHASE 3 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â DEALER DASHBOARD: EDIT DEALERSHIP PAGE
    =========================================================
-   (a) .dashboard-edit-dealership-btn ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the dealer-only
+   (a) .dashboard-edit-dealership-btn ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the dealer-only
        "Edit Dealership Page" action in the shared dashboard
        sidebar profile card. Mirrors the existing
        .dashboard-edit-profile-btn exactly (same HUFA card
        language) and honours the HTML `hidden` attribute.
-   (b) .dde-* ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the /dashboard/dealership editor page layout
+   (b) .dde-* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the /dashboard/dealership editor page layout
        (field grids, logo preview, social inputs, hints).
-       Plain CSS, namespaced, no Tailwind dependencies ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+       Plain CSS, namespaced, no Tailwind dependencies ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â
        same approach as the Phase 1 directory + Phase 2
        storefront. Pages use the existing frozen utility
        classes for the inputs themselves.
@@ -18409,7 +18426,7 @@ a.contact-info-v:hover{color:#005BBF}
         height: 21px
     }
 }
-/* PHASE 5B.1B — TRADE-IN IMAGE MANAGER
+/* PHASE 5B.1B â€” TRADE-IN IMAGE MANAGER
    Namespaced styling for the Trade-In modal only. */
 #tradeInImagePreview.trade-in-image-grid {
     display: grid;
@@ -19861,7 +19878,7 @@ a.contact-info-v:hover{color:#005BBF}
 }
 
 /* ============================================
-   PHASE 5B.1Q — TRADE-IN NOTIFICATIONS & NEGOTIATION UX
+   PHASE 5B.1Q â€” TRADE-IN NOTIFICATIONS & NEGOTIATION UX
    --------------------------------------------
    PRESENTATION ONLY. Scoped to the Trade-In request detail modal
    (#tradeInViewModal) and the reply modals (#counterOfferModal /
@@ -19938,7 +19955,7 @@ a.contact-info-v:hover{color:#005BBF}
     transition: all .25s cubic-bezier(0.23, 1, 0.32, 1)
 }
 
-/* PRIMARY — the obvious next step (HUFA orange). */
+/* PRIMARY â€” the obvious next step (HUFA orange). */
 #tradeInViewModal .trade-negotiation-btn--accept {
     background: linear-gradient(135deg, #E48A2F, #E48A2F);
     border: 1px solid rgba(255, 255, 255, 0.22);
@@ -19951,7 +19968,7 @@ a.contact-info-v:hover{color:#005BBF}
     box-shadow: 0 14px 32px rgba(228, 138, 47, 0.32)
 }
 
-/* INTERACTIVE — Counter Offer reads as a negotiation step. */
+/* INTERACTIVE â€” Counter Offer reads as a negotiation step. */
 #tradeInViewModal .trade-negotiation-btn--counter {
     background: #FFFFFF;
     border: 2px dashed #E48A2F;
@@ -19964,7 +19981,7 @@ a.contact-info-v:hover{color:#005BBF}
     transform: translateY(-2px)
 }
 
-/* DECLINE — clearly different from Accept. */
+/* DECLINE â€” clearly different from Accept. */
 #tradeInViewModal .trade-negotiation-btn--decline {
     background: #FEF2F2;
     border: 1px solid #FECACA;
@@ -20104,7 +20121,7 @@ a.contact-info-v:hover{color:#005BBF}
     overflow-wrap: anywhere
 }
 
-/* TRADE-IN NEGOTIATION THREAD — text conversation per valuation.
+/* TRADE-IN NEGOTIATION THREAD â€” text conversation per valuation.
    Scoped to #tradeInViewModal only. Reuses the HUFA palette
    (orange #E48A2F, navy #08111F, slate grays) and the existing
    .trade-negotiation panel language. Oldest -> newest, newest at
@@ -20240,7 +20257,7 @@ a.contact-info-v:hover{color:#005BBF}
 }
 
 /* ============================================================
-   SAVED VEHICLES — LIST MODE OUTER CARD (horizontal)
+   SAVED VEHICLES â€” LIST MODE OUTER CARD (horizontal)
    Scoped to #savedList so Browse / other pages are unaffected.
    ============================================================ */
 #savedList .vehicle-card-list {
