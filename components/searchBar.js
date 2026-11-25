@@ -209,9 +209,9 @@ export function SearchBar(){
         <span class="leading-none">&times;</span> Clear Filters
       </button>
       <input id="q" placeholder="Search make, model, body type, fuel..."
-      class="flex-1 min-w-[140px] h-[30px] bg-transparent text-[14px] font-medium text-[#081120] placeholder:text-slate-400 outline-none" autocomplete="off">
+      class="flex-1 min-w-[120px] h-[30px] bg-transparent text-[14px] font-medium text-[#081120] placeholder:text-slate-400 outline-none" autocomplete="off">
     </div>
-    <button id="go" class="h-[28px] px-3 bg-[#E48A2F] text-white text-[12px] font-semibold rounded-[6px] hover:brightness-105 transition min-w-[100px] shrink-0">Search Vehicles</button>
+    <button id="go" class="h-[28px] px-2 bg-[#E48A2F] text-white text-[12px] font-semibold rounded-[6px] hover:brightness-105 transition min-w-[80px] shrink-0">Search Vehicles</button>
   </div>
 
   <!-- QUICK FILTERS (toggleable) -->
@@ -988,18 +988,26 @@ function positionCapsuleDD(dd, btn){
   const vw = document.documentElement.clientWidth;
   const vh = window.innerHeight;
   const isMake = dd.id === "hfcDD-make";
-  const width = isMake ? Math.max(320, Math.min(420, vw - 16)) : Math.max(210, Math.min(260, vw - 16));
+  // Use smaller fixed width with max viewport constraint, allow horizontal scroll for content
+  const width = isMake ? Math.max(280, Math.min(380, vw - 32)) : Math.max(200, Math.min(240, vw - 32));
   dd.style.width = width + "px";
   dd.style.position = "fixed";
   dd.style.zIndex = "80";
+  // Calculate left position, ensuring dropdown stays within viewport with small margin
   let left = r.left;
-  if(left + width > vw - 8) left = vw - 8 - width;
+  if(left + width > vw - 8) left = Math.max(8, vw - 8 - width);
   if(left < 8) left = 8;
   dd.style.left = Math.round(left) + "px";
+  // Use fixed top with viewport height check, account for mobile address bar
   let top = r.bottom + 6;
   const dh = dd.offsetHeight || 0;
   if(dh && top + dh > vh - 8) top = Math.max(8, r.top - dh - 6);
   dd.style.top = Math.round(top) + "px";
+  // If dropdown would be too tall for viewport, position above the button instead
+  if(dh && top + dh > vh - 8) {
+    dd.style.top = Math.round(r.top - dh - 6) + "px";
+    dd.style.bottom = "auto";
+  }
 }
 
 async function loadCapsuleOptions(type){
@@ -1712,3 +1720,4 @@ window.removeChip = function(key){
 window.quickFillMake = function(make) { document.getElementById("make").value = make; fillModels(); };
 window.quickSearch = function(text) { document.getElementById("q").value = text; submit(); };
 window.selectSuggestion = function(make, model) { document.getElementById("make").value = make; fillModels(); document.getElementById("model").value = model; submit(); };
+

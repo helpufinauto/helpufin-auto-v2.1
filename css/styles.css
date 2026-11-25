@@ -20853,7 +20853,7 @@ a.contact-info-v:hover{color:#005BBF}
 }
 .saved-page .saved-summary {
   flex: 0 0 auto;
-  padding: 8px 12px;
+  padding: 6px 8px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #fff;
@@ -21047,8 +21047,8 @@ a.contact-info-v:hover{color:#005BBF}
   .saved-page #savedFilterToolbar {
     display: grid;
     grid-template-columns: minmax(0,1fr);
-    gap: 10px;
-    margin-bottom: 10px;
+    gap: 8px;
+    margin-bottom: 8px;
     padding: 12px;
   }
   .saved-page #savedFilterToolbar > .saved-search-wrap,
@@ -21061,10 +21061,10 @@ a.contact-info-v:hover{color:#005BBF}
   .saved-page-heading { align-items: center; gap: 12px; }
   .saved-page-heading > div:first-child { min-width: 0; }
   .saved-page-heading p { max-width: 100%; }
-  .saved-page .saved-summary { padding: 7px 9px; }
-  .saved-page .saved-tools-panel { grid-template-columns: minmax(0,1fr); gap: 10px; margin-bottom: 10px; padding: 12px; }
+  .saved-page .saved-summary { padding: 8px 12px; }
+  .saved-page .saved-tools-panel { grid-template-columns: minmax(0,1fr); gap: 8px; margin-bottom: 8px; }
   .saved-page .saved-sort-chevron { bottom: 13px; }
-  .saved-results-toolbar { min-height: 34px; margin-bottom: 6px; }
+  .saved-results-toolbar { min-height: 32px; margin-bottom: 4px; }
   .saved-page .saved-filterbar { margin-bottom: 8px; }
   .saved-page .saved-filter-trigger { width: 100%; justify-content: flex-start; }
   .saved-page .saved-filter-trigger .saved-filter-chevron { margin-left: auto; }
