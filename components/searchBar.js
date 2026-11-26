@@ -1233,7 +1233,6 @@ const vals = [...selected];
   wrap.appendChild(actions);
 
   dd.appendChild(wrap);
-  setTimeout(() => search.focus(), 0);
 }
 
 
