@@ -1452,7 +1452,13 @@ function bindCapsuleGlobalListeners(){
     closeAllCapsules();
   });
   document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeAllCapsules(); });
-  window.addEventListener("resize", () => closeAllCapsules());
+  window.addEventListener("resize", () => {
+    // On mobile, showing the soft keyboard resizes the viewport. Do not
+    // close an open capsule dropdown merely because the keyboard appeared;
+    // outside-click, Escape, Apply and Reset still close it normally.
+    if (openCapsule) return;
+    closeAllCapsules();
+  });
   // Scrolling the page closes the dropdown (scrolling INSIDE the
   // dropdown list is ignored so options can be browsed)
   window.addEventListener("scroll", (e) => {
